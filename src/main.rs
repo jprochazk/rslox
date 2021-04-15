@@ -67,7 +67,7 @@ fn main() {
     vm.define_native_fn("str", str_wrapper);
     vm.define_native_fn("panic", panic_wrapper);
     vm.define_native_fn("log", log_wrapper);
-    if let Some(chunk) = compiler::compile(
+    /* if let Some(chunk) = compiler::compile(
         r#"
         fun a() { return b(); }
         fun b() { return c(); }
@@ -85,8 +85,8 @@ fn main() {
         if let Err(err) = vm.interpret(&chunk) {
             eprintln!("Error: {}", err);
         }
-    }
-    /* let mut rl = Editor::<()>::new();
+    } */
+    let mut rl = Editor::<()>::new();
     loop {
         let line = rl.readline("> ");
         match line {
@@ -96,9 +96,8 @@ fn main() {
             Ok(line) => {
                 rl.add_history_entry(line.as_str());
                 if let Some(func) = compiler::compile(&line) {
-                    match vm.interpret(&func) {
-                        Ok(value) => println!("{}", value),
-                        Err(err) => println!("{}", err),
+                    if let Err(err) = vm.interpret(&func) {
+                        eprintln!("Error: {}", err);
                     }
                 }
             }
@@ -113,5 +112,5 @@ fn main() {
                 break;
             }
         }
-    } */
+    }
 }
