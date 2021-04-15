@@ -41,8 +41,8 @@ fn main() {
         var start = clock();
         var result = fib(30);
         var end = clock();
-        print ("result: " + str(result));
-        print ("time: " + str(end - start) + "ms");
+        print result;
+        print (end - start);
         "#,
     ) {
         if let Err(err) = vm.interpret(&chunk) {
