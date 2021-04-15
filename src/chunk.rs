@@ -51,6 +51,9 @@ pub fn disassemble_instruction(
     offset: usize,
     nested: &mut Vec<(String, Chunk)>,
 ) -> usize {
+    if offset >= chunk.buffer.len() {
+        return 0;
+    }
     print!("{:04} ", offset);
     if offset > 0 && chunk.lines[offset] == chunk.lines[offset - 1] {
         print!("   | ");

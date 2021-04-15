@@ -94,7 +94,6 @@ impl From<Opcode> for u8 {
 
 impl Display for Opcode {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        use Opcode::*;
         write!(f, "{:?}", self)
     }
 }

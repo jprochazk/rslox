@@ -9,4 +9,3 @@ edition = "2018"
 [dependencies]
 rustyline = "8.0.0"
 thiserror = "1.0.24"
-chrono = "0.4.19"

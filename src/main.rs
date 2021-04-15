@@ -18,7 +18,6 @@ use value::{Object, Value};
 use vm::Vm;
 
 fn clock_wrapper(_vm: &mut Vm, _args: Vec<Value>) -> vm::Result<Value> {
-    //Ok(Value::Number(chrono::Utc::now().timestamp_millis() as f64))
     Ok(Value::Number(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -52,15 +51,15 @@ fn main() {
     vm.define_native_fn("panic", panic_wrapper);
     if let Some(chunk) = compiler::compile(
         r#"
-        fun fib(n) {
-            if (n < 2) return n;
-            return fib(n - 2) + fib(n - 1);
+        var x = "global";
+        fun outer() {
+          var x = "outer";
+          fun inner() {
+            print x;
+          }
+          inner();
         }
-        var start = clock();
-        var result = fib(30);
-        var end = clock();
-        print result;
-        print (end - start);
+        outer();
         "#,
     ) {
         if let Err(err) = vm.interpret(&chunk) {
