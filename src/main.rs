@@ -17,12 +17,16 @@ use rustyline::{error::ReadlineError, Editor};
 use value::{Object, Value};
 use vm::Vm;
 
+// TODO: https://craftinginterpreters.com/closures.html
+
 fn clock_wrapper(_vm: &mut Vm, _args: Vec<Value>) -> vm::Result<Value> {
     Ok(Value::Number(
-        std::time::SystemTime::now()
+        (std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_secs_f64(),
+            .as_secs_f64()
+            * 1000f64)
+            .floor(),
     ))
 }
 
@@ -44,18 +48,38 @@ fn panic_wrapper(vm: &mut Vm, args: Vec<Value>) -> vm::Result<Value> {
     Err(vm.error("Error with no message"))
 }
 
+fn log_wrapper(_vm: &mut Vm, args: Vec<Value>) -> vm::Result<Value> {
+    let mut iter = args.iter().peekable();
+    while let Some(arg) = iter.next() {
+        print!("{}", arg);
+        if iter.peek().is_some() {
+            print!(" ");
+        } else {
+            println!();
+        }
+    }
+    Ok(Value::Nil)
+}
+
 fn main() {
     let mut vm = Vm::new();
     vm.define_native_fn("clock", clock_wrapper);
     vm.define_native_fn("str", str_wrapper);
     vm.define_native_fn("panic", panic_wrapper);
+    vm.define_native_fn("log", log_wrapper);
     if let Some(chunk) = compiler::compile(
         r#"
-        fun fib(n) {
-            if (n < 2) return n;
-            return fib(n - 2) + fib(n - 1);
-        }
-        print fib(15);
+        fun a() { return b(); }
+        fun b() { return c(); }
+        fun c() { return "test"; }
+        print a();
+        //fun fib(n) {
+        //    if (n < 2) return n;
+        //    return fib(n - 2) + fib(n - 1);
+        //}
+        //var start = clock();
+        //log(fib(30));
+        //log(clock() - start, "ms");
         "#,
     ) {
         if let Err(err) = vm.interpret(&chunk) {

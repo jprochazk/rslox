@@ -124,6 +124,24 @@ impl CallFrame {
     }
 }
 
+struct CallStack<'a>(&'a Stack<CallFrame>);
+impl<'a> Display for CallStack<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let count = self.0.len() - 1;
+        for (i, frame) in self.0.iter().enumerate() {
+            if !frame.func().name.is_empty() {
+                write!(
+                    f,
+                    "{}{}",
+                    frame.func().name,
+                    if i != count { " -> " } else { "" }
+                )?;
+            }
+        }
+
+        Ok(())
+    }
+}
 // HACK: To sidestep lifetime constraint of CallFrame caused by partial mutable borrow of vm state
 struct CurrentFrame(*mut CallFrame);
 impl Deref for CurrentFrame {
@@ -196,6 +214,7 @@ impl Vm {
         let mut frame = CurrentFrame(&mut self.frames[frames_len - 1]);
         loop {
             if cfg!(debug_assertions) {
+                println!("        | {}", CallStack(&self.frames));
                 println!("        | {}", frame.stack());
                 disassemble_instruction(&frame.func().chunk, frame.ip, &mut Vec::new());
             }
@@ -354,6 +373,7 @@ impl Vm {
                                 for _ in 0..count {
                                     args.push(self.stack.pop());
                                 }
+                                args.reverse();
                                 self.stack.pop();
                                 let value = (func.ptr)(self, args)?;
                                 self.stack.push(value);
