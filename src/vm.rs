@@ -25,7 +25,7 @@ impl<'a> Display for StackTrace<'a> {
             if !frame.func().name.is_empty() {
                 write!(
                     f,
-                    "\tat {} in call to {}{}",
+                    "\tat line {} (inside {}){}",
                     frame.func().chunk.lines[frame.ip - 1],
                     frame.func().name,
                     if i != count { "\n" } else { "" }
@@ -44,7 +44,7 @@ macro_rules! error {
         if $stack.len() > 1 {
             write!(msg, "\n{}", StackTrace($stack)).unwrap();
         }
-        Err(Error(msg))
+        Error(msg)
     }}
 }
 
@@ -97,8 +97,13 @@ impl CallFrame {
     #[inline]
     fn read_bytes(&mut self, n: usize) -> &[u8] {
         self.ip += n;
-        let v = &self.func().chunk.buffer[(self.ip - n)..self.ip];
-        v
+        unsafe {
+            &self
+                .func()
+                .chunk
+                .buffer
+                .get_unchecked((self.ip - n)..self.ip)
+        }
     }
 
     #[inline]
@@ -143,7 +148,7 @@ impl Vm {
     }
 
     pub fn error(&mut self, message: &str) -> Error {
-        Error(message.to_string())
+        error!(&self.frames, "{}", message)
     }
 
     pub fn define_native_fn(&mut self, name: &str, ptr: NativeFnPtr) {
@@ -181,9 +186,9 @@ impl Vm {
                         $frame.stack().push(Value::$out(left $op right));
                         continue;
                     }
-                    return error!($stack, "Left operand must be a number");
+                    return Err(error!($stack, "Left operand must be a number"));
                 }
-                return error!($stack, "Right operand must be a number");
+                return Err(error!($stack, "Right operand must be a number"));
             }};
         }
 
@@ -192,7 +197,7 @@ impl Vm {
         loop {
             if cfg!(debug_assertions) {
                 println!("        | {}", frame.stack());
-                disassemble_instruction(&frame.func().chunk, frame.ip);
+                disassemble_instruction(&frame.func().chunk, frame.ip, &mut Vec::new());
             }
             let instruction: Opcode = frame.read_opcode();
             match instruction {
@@ -235,10 +240,10 @@ impl Vm {
                             }
                         }
                     }
-                    return error!(
+                    return Err(error!(
                         &self.frames,
                         "Operands must be numbers or strings and must also match"
-                    );
+                    ));
                 }
                 Opcode::Subtract => bin_op!(&self.frames, frame, Number, -),
                 Opcode::Multiply => bin_op!(&self.frames, frame, Number, *),
@@ -248,7 +253,7 @@ impl Vm {
                         frame.stack().push(Value::Number(-value));
                         continue;
                     }
-                    return error!(&self.frames, "Operand must be a number");
+                    return Err(error!(&self.frames, "Operand must be a number"));
                 }
 
                 Opcode::Not => {
@@ -283,7 +288,7 @@ impl Vm {
                     let name = object.as_string();
                     match self.globals.get(name) {
                         Some(value) => frame.stack().push(value.clone()),
-                        None => return error!(&self.frames, "Undefined variable '{}'", name),
+                        None => return Err(error!(&self.frames, "Undefined variable '{}'", name)),
                     };
                     continue;
                 }
@@ -295,7 +300,7 @@ impl Vm {
                         Some(value) => *value = frame.stack().peek(0).clone(),
                         None => {
                             frame.stack().pop();
-                            return error!(&self.frames, "Undefined variable '{}'", name);
+                            return Err(error!(&self.frames, "Undefined variable '{}'", name));
                         }
                     }
                     continue;
@@ -327,14 +332,14 @@ impl Vm {
                             Object::Function(func) => {
                                 if count != func.arity as usize {
                                     frame.stack().pop();
-                                    return error!(
+                                    return Err(error!(
                                         &self.frames,
                                         "Expected {} arguments but got {}", func.arity, count
-                                    );
+                                    ));
                                 }
                                 if self.frames.len() == FRAMES_MAX {
                                     frame.stack().pop();
-                                    return error!(&self.frames, "Stack overflow");
+                                    return Err(error!(&self.frames, "Stack overflow"));
                                 }
                                 // this whole dance is safe because we're not mutating the function
                                 let stack_top = self.stack.len() - count;
@@ -349,6 +354,7 @@ impl Vm {
                                 for _ in 0..count {
                                     args.push(self.stack.pop());
                                 }
+                                self.stack.pop();
                                 let value = (func.ptr)(self, args)?;
                                 self.stack.push(value);
                                 continue;
@@ -357,7 +363,7 @@ impl Vm {
                         }
                     }
                     frame.stack().pop();
-                    return error!(&self.frames, "Can only call functions and classes");
+                    return Err(error!(&self.frames, "Can only call functions and classes"));
                 }
 
                 Opcode::JumpIfFalse => {

@@ -18,7 +18,13 @@ use value::{Object, Value};
 use vm::Vm;
 
 fn clock_wrapper(_vm: &mut Vm, _args: Vec<Value>) -> vm::Result<Value> {
-    Ok(Value::Number(chrono::Utc::now().timestamp_millis() as f64))
+    //Ok(Value::Number(chrono::Utc::now().timestamp_millis() as f64))
+    Ok(Value::Number(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64(),
+    ))
 }
 
 fn str_wrapper(vm: &mut Vm, args: Vec<Value>) -> vm::Result<Value> {
@@ -28,10 +34,22 @@ fn str_wrapper(vm: &mut Vm, args: Vec<Value>) -> vm::Result<Value> {
     Ok(Value::object(Object::String(format!("{}", args[0]))))
 }
 
+fn panic_wrapper(vm: &mut Vm, args: Vec<Value>) -> vm::Result<Value> {
+    if args.len() == 1 {
+        if let Value::Object(object) = &args[0] {
+            if let Object::String(string) = &(*object.borrow()) {
+                return Err(vm.error(string));
+            }
+        }
+    }
+    Err(vm.error("Error with no message"))
+}
+
 fn main() {
     let mut vm = Vm::new();
     vm.define_native_fn("clock", clock_wrapper);
     vm.define_native_fn("str", str_wrapper);
+    vm.define_native_fn("panic", panic_wrapper);
     if let Some(chunk) = compiler::compile(
         r#"
         fun fib(n) {
@@ -46,7 +64,7 @@ fn main() {
         "#,
     ) {
         if let Err(err) = vm.interpret(&chunk) {
-            eprintln!("{}", err);
+            eprintln!("Error: {}", err);
         }
     }
     /* let mut rl = Editor::<()>::new();

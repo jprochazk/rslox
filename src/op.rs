@@ -95,37 +95,6 @@ impl From<Opcode> for u8 {
 impl Display for Opcode {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         use Opcode::*;
-        write!(
-            f,
-            "{}",
-            match self {
-                Constant => "OP_CONSTANT",
-                Nil => "OP_NIL",
-                True => "OP_TRUE",
-                False => "OP_FALSE",
-                Negate => "OP_NEGATE",
-                Add => "OP_ADD",
-                Subtract => "OP_SUBTRACT",
-                Multiply => "OP_MULTIPLY",
-                Divide => "OP_DIVIDE",
-                Not => "OP_NOT",
-                Equal => "OP_EQUAL",
-                Less => "OP_LESS",
-                Greater => "OP_GREATER",
-                Print => "OP_PRINT",
-                Pop => "OP_POP",
-                DefineGlobal => "OP_DEFINE_GLOBAL",
-                GetGlobal => "OP_GET_GLOBAL",
-                SetGlobal => "OP_SET_GLOBAL",
-                GetLocal => "OP_GET_LOCAL",
-                SetLocal => "OP_SET_LOCAL",
-                Call => "OP_CALL",
-                JumpIfFalse => "OP_JUMP_IF_FALSE",
-                Jump => "OP_JUMP",
-                Loop => "OP_LOOP",
-                Return => "OP_RETURN",
-                Max => "OP_MAX",
-            }
-        )
+        write!(f, "{:?}", self)
     }
 }
