@@ -57,7 +57,6 @@ struct Compiler<'a> {
 struct CompilerState<'a> {
     func: Function,
     kind: FunctionKind,
-    has_return: bool,
     locals: Locals<'a>,
 }
 
@@ -66,7 +65,6 @@ impl<'a> CompilerState<'a> {
         CompilerState {
             func: Function::new(),
             kind,
-            has_return: false,
             locals: Locals::new(),
         }
     }
@@ -237,9 +235,7 @@ impl<'a> Compiler<'a> {
 
     fn end_function(&mut self) -> Function {
         let mut state = self.state.pop();
-        if !state.has_return {
-            emit!(self, state.func.chunk, op Return);
-        }
+        emit!(self, state.func.chunk, op Nil, Return);
         state.func
     }
 
@@ -456,7 +452,6 @@ impl<'a> Compiler<'a> {
             self.consume(TokenKind::Semicolon, "Expected ';'");
             emit!(self, self.state.top_mut().func.chunk, op Return);
         }
-        self.state.top_mut().has_return = true;
     }
 
     fn print_statement(&mut self) {

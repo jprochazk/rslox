@@ -51,15 +51,11 @@ fn main() {
     vm.define_native_fn("panic", panic_wrapper);
     if let Some(chunk) = compiler::compile(
         r#"
-        var x = "global";
-        fun outer() {
-          var x = "outer";
-          fun inner() {
-            print x;
-          }
-          inner();
+        fun fib(n) {
+            if (n < 2) return n;
+            return fib(n - 2) + fib(n - 1);
         }
-        outer();
+        print fib(15);
         "#,
     ) {
         if let Err(err) = vm.interpret(&chunk) {
