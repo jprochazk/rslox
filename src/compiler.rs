@@ -28,14 +28,7 @@ pub fn compile(source: &str) -> Option<Function> {
 
     if cfg!(debug_assertions) && !compiler.errored {
         let func = &compiler.state.top().func;
-        disassemble_chunk(
-            &func.chunk,
-            if func.name.is_empty() {
-                "MAIN"
-            } else {
-                &func.name
-            },
-        );
+        disassemble_chunk(&func.chunk, if func.name.is_empty() { "MAIN" } else { &func.name });
         println!("==========");
     }
     if compiler.errored {
@@ -54,10 +47,12 @@ struct Compiler<'a> {
     panic_mode: bool,
 }
 
+#[derive(Debug)]
 struct CompilerState<'a> {
     func: Function,
     kind: FunctionKind,
     locals: Locals<'a>,
+    upvalues: Stack<Upvalue>,
 }
 
 impl<'a> CompilerState<'a> {
@@ -66,6 +61,7 @@ impl<'a> CompilerState<'a> {
             func: Function::new(),
             kind,
             locals: Locals::new(),
+            upvalues: Stack::new(),
         }
     }
 }
@@ -217,26 +213,11 @@ impl<'a> Compiler<'a> {
         self.state.top_mut().locals.current_depth -= 1;
 
         while self.state.top_mut().locals.stack.len() > 0
-            && self.state.top_mut().locals.stack.top().depth
-                > self.state.top_mut().locals.current_depth as isize
+            && self.state.top_mut().locals.stack.top().depth > self.state.top_mut().locals.current_depth as isize
         {
             emit!(self, self.state.top_mut().func.chunk, op Pop);
             self.state.top_mut().locals.stack.pop();
         }
-    }
-
-    fn begin_function(&mut self, kind: FunctionKind) {
-        self.state.push(CompilerState::new(kind));
-        let current = self.state.top_mut();
-        if kind != FunctionKind::Script {
-            current.func.name = self.previous.lexeme.to_string();
-        }
-    }
-
-    fn end_function(&mut self) -> Function {
-        let mut state = self.state.pop();
-        emit!(self, state.func.chunk, op Nil, Return);
-        state.func
     }
 
     fn add_local(&mut self, name: Token<'a>) {
@@ -244,23 +225,60 @@ impl<'a> Compiler<'a> {
             self.error("Too many local variables", name);
             return;
         }
-        self.state
-            .top_mut()
-            .locals
-            .stack
-            .push(Local { name, depth: -1 })
+        self.state.top_mut().locals.stack.push(Local { name, depth: -1 })
     }
 
-    fn resolve_local(&mut self, name: Token<'a>) -> i8 {
-        if self.state.top_mut().locals.stack.len() > 0 {
-            for i in (0..self.state.top_mut().locals.stack.len()).rev() {
-                let local = &self.state.top_mut().locals.stack[i];
-                if local.name.lexeme == name.lexeme {
-                    if local.depth == -1 {
-                        self.error("Can't read local variable in its own initializer", name);
-                    }
-                    return i as i8;
+    fn add_upvalue(&mut self, state_idx: usize, index: u8, is_local: bool) -> u8 {
+        let state = &mut self.state[state_idx];
+        let upvalue_count = state.func.num_upvalues as usize;
+        for i in 0..upvalue_count {
+            let upvalue = &state.upvalues[i];
+            if upvalue.index == index && upvalue.is_local == is_local {
+                return i as u8;
+            }
+        }
+
+        if upvalue_count == std::u8::MAX as usize {
+            self.error("Too many captured variables", self.previous);
+            return 0;
+        }
+
+        state.upvalues.push(Upvalue { is_local, index });
+        state.func.num_upvalues += 1;
+        state.func.num_upvalues - 1
+    }
+
+    fn resolve_local(&mut self, state_idx: usize, name: Token<'a>) -> i8 {
+        let state = &self.state[state_idx];
+        for i in (0..state.locals.stack.len()).rev() {
+            let local = &state.locals.stack[i];
+            if local.name.lexeme == name.lexeme {
+                if local.depth == -1 {
+                    self.error("Can't read local variable in its own initializer", name);
                 }
+                return i as i8;
+            }
+        }
+        -1
+    }
+
+    fn resolve_upvalue(&mut self, state_idx: usize, name: Token<'a>) -> i8 {
+        println!("{} {}", state_idx, name.lexeme);
+        if self.state.len() >= 3 {
+            // we're in a nested scope
+            // try to find the variable in the enclosing scope
+            let enclosing = state_idx - 1;
+            let local = self.resolve_local(enclosing, name);
+            if local != -1 {
+                // if found, add it as an upvalue of the current function and return its index
+                return self.add_upvalue(state_idx, local as u8, true) as i8;
+            }
+            // if it's not in the enclosing scope, it could be found further down the scope stack
+            // try to find the variable in the enclosing scope's upvalues
+            let upvalue = self.resolve_upvalue(state_idx - 1, name);
+            if upvalue != -1 {
+                // since this
+                return self.add_upvalue(state_idx, upvalue as u8, false) as i8;
             }
         }
         -1
@@ -270,8 +288,7 @@ impl<'a> Compiler<'a> {
         if self.state.top_mut().locals.current_depth == 0 {
             return;
         }
-        self.state.top_mut().locals.stack.top_mut().depth =
-            self.state.top_mut().locals.current_depth as isize;
+        self.state.top_mut().locals.stack.top_mut().depth = self.state.top_mut().locals.current_depth as isize;
     }
 
     fn expression(&mut self) {
@@ -323,7 +340,12 @@ impl<'a> Compiler<'a> {
     }
 
     fn function(&mut self, kind: FunctionKind) {
-        self.begin_function(kind);
+        self.state.push(CompilerState::new(kind));
+        let current = self.state.top_mut();
+        if kind != FunctionKind::Script {
+            current.func.name = self.previous.lexeme.to_string();
+        }
+
         self.begin_scope();
         self.consume(TokenKind::LeftParen, "Expected '('");
         if !self.check(TokenKind::RightParen) {
@@ -331,10 +353,7 @@ impl<'a> Compiler<'a> {
                 let current = self.state.top_mut();
                 current.func.arity += 1;
                 if current.func.arity == std::u8::MAX {
-                    self.error(
-                        "Functions can't have more than 255 parameters",
-                        self.previous,
-                    );
+                    self.error("Functions can't have more than 255 parameters", self.previous);
                 }
                 let param_const = self.parse_variable("Expected parameter name");
                 self.define_variable(param_const);
@@ -344,12 +363,21 @@ impl<'a> Compiler<'a> {
             }
         }
         self.consume(TokenKind::RightParen, "Expected ')'");
-
         self.consume(TokenKind::LeftBrace, "Expected '{'");
         self.block();
 
-        let value = Value::object(Object::Function(self.end_function()));
-        emit!(self, self.state.top_mut().func.chunk, const value + push);
+        let mut state = self.state.pop();
+        emit!(self, state.func.chunk, op Nil, Return);
+
+        let num_upvalues = state.func.num_upvalues;
+        let value = Value::object(Object::Function(state.func));
+        let offset = emit!(self, self.state.top_mut().func.chunk, const value);
+        emit!(self, self.state.top_mut().func.chunk, raw Opcode::Closure, offset);
+        for i in 0..num_upvalues {
+            let upvalue = &state.upvalues[i as usize];
+            let is_local = if upvalue.is_local { 1u8 } else { 0u8 };
+            emit!(self, self.state.top_mut().func.chunk, raw is_local, upvalue.index);
+        }
     }
 
     fn var_declaration(&mut self) {
@@ -386,15 +414,10 @@ impl<'a> Compiler<'a> {
             .stack
             .iter()
             .rev()
-            .filter(|local| {
-                local.depth == -1 || local.depth >= self.state.top().locals.current_depth as isize
-            })
+            .filter(|local| local.depth == -1 || local.depth >= self.state.top().locals.current_depth as isize)
             .any(|local| local.name.lexeme == name.lexeme)
         {
-            self.error(
-                "Variable with this name already exists within current scope",
-                name,
-            );
+            self.error("Variable with this name already exists within current scope", name);
         }
         self.add_local(name);
     }
@@ -563,13 +586,22 @@ impl<'a> Compiler<'a> {
     }
 
     fn named_variable(&mut self, name: Token<'a>, can_assign: bool) {
-        let (arg, set, get) = match self.resolve_local(name) {
-            -1 => (
-                self.identifier_constant(name),
-                Opcode::SetGlobal,
-                Opcode::GetGlobal,
-            ),
-            n => (n as u8, Opcode::SetLocal, Opcode::GetLocal),
+        println!("RESOLVING '{}'", name.lexeme);
+        let top = self.state.len() - 1;
+        let mut arg = self.resolve_local(top, name);
+        let (arg, set, get) = if arg != -1 {
+            println!("LOCAL {} {} {}", arg, top, name.lexeme);
+            (arg as u8, Opcode::SetLocal, Opcode::GetLocal)
+        } else if ({
+            arg = self.resolve_upvalue(top, name);
+            arg
+        }) != -1
+        {
+            println!("UPVALUE {} {} {}", arg, top, name.lexeme);
+            (arg as u8, Opcode::SetUpvalue, Opcode::GetUpvalue)
+        } else {
+            println!("GLOBAL {} {}", top, name.lexeme);
+            (self.identifier_constant(name), Opcode::SetGlobal, Opcode::GetGlobal)
         };
 
         if can_assign && self.maybe(TokenKind::Equal) {
@@ -587,10 +619,7 @@ impl<'a> Compiler<'a> {
                 self.expression();
                 count += 1;
                 if count == std::u8::MAX {
-                    self.error(
-                        "Functions can't have more than 255 parameters",
-                        self.previous,
-                    );
+                    self.error("Functions can't have more than 255 parameters", self.previous);
                 }
                 if !self.maybe(TokenKind::Comma) {
                     break;
@@ -784,6 +813,12 @@ impl<'a> Locals<'a> {
             current_depth: 0,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Upvalue {
+    is_local: bool,
+    index: u8,
 }
 
 impl Rule {

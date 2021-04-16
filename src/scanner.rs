@@ -18,11 +18,7 @@ macro_rules! token {
         )
     }};
     ($self:ident, $kind:ident) => {{
-        Token::new(
-            TokenKind::$kind,
-            &$self.source[$self.start..$self.current],
-            $self.line,
-        )
+        Token::new(TokenKind::$kind, &$self.source[$self.start..$self.current], $self.line)
     }};
 }
 

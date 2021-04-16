@@ -4,6 +4,7 @@ use std::fmt::{self, Display, Formatter};
 #[derive(Clone, Copy, Debug)]
 pub enum Opcode {
     Constant,
+    Closure,
     Nil,
     True,
     False,
@@ -27,6 +28,8 @@ pub enum Opcode {
     SetGlobal,
     GetLocal,
     SetLocal,
+    GetUpvalue,
+    SetUpvalue,
 
     Call,
 
@@ -57,6 +60,7 @@ impl Opcode {
         use Opcode::*;
         match self {
             Constant => 1,
+            Closure => 1,
             Nil => 0,
             True => 0,
             False => 0,
@@ -76,6 +80,8 @@ impl Opcode {
             SetGlobal => 1,
             GetLocal => 1,
             SetLocal => 1,
+            GetUpvalue => 1,
+            SetUpvalue => 1,
             Call => 1,
             JumpIfFalse => 2,
             Jump => 2,

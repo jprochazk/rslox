@@ -1,9 +1,5 @@
 #![feature(maybe_uninit_uninit_array, maybe_uninit_ref)]
-#![allow(
-    irrefutable_let_patterns,
-    clippy::blocks_in_if_conditions,
-    clippy::unnecessary_wraps
-)]
+#![allow(irrefutable_let_patterns, clippy::blocks_in_if_conditions, clippy::unnecessary_wraps)]
 
 mod chunk;
 mod compiler;
@@ -67,26 +63,27 @@ fn main() {
     vm.define_native_fn("str", str_wrapper);
     vm.define_native_fn("panic", panic_wrapper);
     vm.define_native_fn("log", log_wrapper);
-    /* if let Some(chunk) = compiler::compile(
+    /* if let Some(chunk) = */
+    compiler::compile(
         r#"
-        fun a() { return b(); }
-        fun b() { return c(); }
-        fun c() { return "test"; }
-        print a();
-        //fun fib(n) {
-        //    if (n < 2) return n;
-        //    return fib(n - 2) + fib(n - 1);
-        //}
-        //var start = clock();
-        //log(fib(30));
-        //log(clock() - start, "ms");
+        fun outer() {
+            var a = 1;
+            var b = 2;
+            fun middle() {
+              var c = 3;
+              var d = 4;
+              fun inner() {
+                print a + c + b + d;
+              }
+            }
+          }
         "#,
-    ) {
-        if let Err(err) = vm.interpret(&chunk) {
-            eprintln!("Error: {}", err);
-        }
-    } */
-    let mut rl = Editor::<()>::new();
+    ); /* {
+           if let Err(err) = vm.interpret(&chunk) {
+               eprintln!("Error: {}", err);
+           }
+       } */
+    /* let mut rl = Editor::<()>::new();
     loop {
         let line = rl.readline("> ");
         match line {
@@ -112,5 +109,5 @@ fn main() {
                 break;
             }
         }
-    }
+    } */
 }

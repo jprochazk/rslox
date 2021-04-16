@@ -1,7 +1,7 @@
 use crate::op::*;
 use crate::value::{Object, Value};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Chunk {
     pub constants: Vec<Value>,
     pub lines: Vec<usize>,
@@ -46,11 +46,7 @@ pub fn disassemble_chunk(chunk: &Chunk, name: &str) {
     }
 }
 
-pub fn disassemble_instruction(
-    chunk: &Chunk,
-    offset: usize,
-    nested: &mut Vec<(String, Chunk)>,
-) -> usize {
+pub fn disassemble_instruction(chunk: &Chunk, offset: usize, nested: &mut Vec<(String, Chunk)>) -> usize {
     print!("{:04} ", offset);
     if offset > 0 && chunk.lines[offset] == chunk.lines[offset - 1] {
         print!("   | ");
@@ -62,20 +58,39 @@ pub fn disassemble_instruction(
     print!("{}", op);
     use Opcode::*;
     match op {
-        Constant => println!("\t{}", {
+        Constant => println!("\t{}", chunk.constants[chunk.buffer[offset + 1] as usize]),
+        Closure => {
             let value = &chunk.constants[chunk.buffer[offset + 1] as usize];
+            println!("\t{}", value);
             if let Value::Object(object) = value {
                 if let Object::Function(func) = &(*object.borrow()) {
                     nested.push((func.name.clone(), func.chunk.clone()));
+
+                    let upvalues = func.num_upvalues as usize;
+                    let mut local_offset = offset + 1;
+                    for _ in 0..upvalues {
+                        let is_local = chunk.buffer[local_offset + 1];
+                        let index = chunk.buffer[local_offset + 2];
+                        println!(
+                            "{:04}    | \t\t{} {}",
+                            local_offset + 1,
+                            if is_local == 1 { "local" } else { "upvalue" },
+                            index
+                        );
+                        local_offset += 2;
+                    }
+
+                    return op.operands() + 1 + upvalues as usize * 2;
                 }
             }
-            value
-        }),
+        }
         DefineGlobal => println!("\t{}", chunk.constants[chunk.buffer[offset + 1] as usize]),
         GetGlobal => println!("\t{}", chunk.constants[chunk.buffer[offset + 1] as usize]),
         SetGlobal => println!("\t{}", chunk.constants[chunk.buffer[offset + 1] as usize]),
         GetLocal => println!("\t[{}]", chunk.buffer[offset + 1]),
         SetLocal => println!("\t[{}]", chunk.buffer[offset + 1]),
+        GetUpvalue => println!("\t[{}]", chunk.buffer[offset + 1]),
+        SetUpvalue => println!("\t[{}]", chunk.buffer[offset + 1]),
         Call => println!("\t\t{}", chunk.constants[chunk.buffer[offset + 1] as usize]),
         JumpIfFalse => println!(
             "\t+{}",

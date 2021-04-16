@@ -7,7 +7,7 @@ use crate::{
     chunk::disassemble_instruction,
     op::Opcode,
     stack::Stack,
-    value::{Function, NativeFn, NativeFnPtr, Object, Table, Value},
+    value::{Closure, Function, NativeFn, NativeFnPtr, Object, Table, Value},
 };
 
 use thiserror::Error;
@@ -59,7 +59,7 @@ const FRAMES_MAX: usize = 64;
 #[derive(Debug)]
 pub struct CallFrame {
     pub ip: usize,
-    func: *const Function,
+    closure: *const Closure,
     // HACK: to sidestep lifetime constraints caused by partial mutable borrow of vm state
     slots: *mut Stack<Value>,
     stack_top: usize,
@@ -67,19 +67,24 @@ pub struct CallFrame {
 }
 
 impl CallFrame {
-    pub fn new(slots: *mut Stack<Value>, stack_top: usize, func: *const Function) -> CallFrame {
+    pub fn new(slots: *mut Stack<Value>, stack_top: usize, closure: *const Closure) -> CallFrame {
         CallFrame {
             ip: 0,
-            func,
+            closure,
             slots,
             stack_top,
-            pop_n: unsafe { ((*func).arity + 1) as usize },
+            pop_n: unsafe { ((*closure).func().arity + 1) as usize },
         }
     }
 
     #[inline]
+    fn closure(&self) -> &Closure {
+        unsafe { &(*self.closure) }
+    }
+
+    #[inline]
     fn func(&self) -> &Function {
-        unsafe { &*self.func }
+        self.closure().func()
     }
 
     #[inline]
@@ -97,13 +102,7 @@ impl CallFrame {
     #[inline]
     fn read_bytes(&mut self, n: usize) -> &[u8] {
         self.ip += n;
-        unsafe {
-            &self
-                .func()
-                .chunk
-                .buffer
-                .get_unchecked((self.ip - n)..self.ip)
-        }
+        unsafe { &self.func().chunk.buffer.get_unchecked((self.ip - n)..self.ip) }
     }
 
     #[inline]
@@ -130,12 +129,7 @@ impl<'a> Display for CallStack<'a> {
         let count = self.0.len() - 1;
         for (i, frame) in self.0.iter().enumerate() {
             if !frame.func().name.is_empty() {
-                write!(
-                    f,
-                    "{}{}",
-                    frame.func().name,
-                    if i != count { " -> " } else { "" }
-                )?;
+                write!(f, "{}{}", frame.func().name, if i != count { " -> " } else { "" })?;
             }
         }
 
@@ -172,10 +166,8 @@ impl Vm {
     pub fn define_native_fn(&mut self, name: &str, ptr: NativeFnPtr) {
         // TODO: maybe fix this according to 24.7 defineNative(...) if GC is ever implemented
         let name = name.to_string();
-        self.globals.insert(
-            name.clone(),
-            Value::object(Object::NativeFn(NativeFn::new(name, ptr))),
-        );
+        self.globals
+            .insert(name.clone(), Value::object(Object::NativeFn(NativeFn::new(name, ptr))));
     }
 
     pub fn interpret(&mut self, func: &Function) -> Result<()> {
@@ -191,7 +183,8 @@ impl Vm {
         // The CallFrame also holds a mutable pointer to the stack.
         // This is safe because we don't ever violate the
         // "only one mutable reference at a time" rule.
-        self.frames.push(CallFrame::new(&mut self.stack, 0, func));
+        self.frames
+            .push(CallFrame::new(&mut self.stack, 0, &Closure::new(func)));
         self.run()
     }
 
@@ -225,6 +218,15 @@ impl Vm {
                     frame.stack().push(constant);
                     continue;
                 }
+                Opcode::Closure => {
+                    let constant = frame.read_const().clone();
+                    let object = constant.as_object();
+                    let object = &(*object.borrow());
+                    let func = object.as_function();
+                    let closure = Closure::new(func);
+                    frame.stack().push(Value::object(Object::Closure(closure)));
+                    continue;
+                }
                 Opcode::Nil => {
                     frame.stack().push(Value::Nil);
                     continue;
@@ -251,8 +253,7 @@ impl Vm {
                         if let Object::String(left) = &*left.borrow() {
                             if let Value::Object(right) = right {
                                 if let Object::String(right) = &*right.borrow() {
-                                    let new_obj =
-                                        Value::object(Object::String(format!("{}{}", left, right)));
+                                    let new_obj = Value::object(Object::String(format!("{}{}", left, right)));
                                     frame.stack().push(new_obj);
                                     continue;
                                 }
@@ -336,6 +337,9 @@ impl Vm {
                     frame.stack()[slot as usize] = frame.stack().top().clone();
                     continue;
                 }
+                // TODO
+                Opcode::GetUpvalue => {}
+                Opcode::SetUpvalue => {}
 
                 Opcode::Print => {
                     let value = frame.stack().pop();
@@ -348,7 +352,7 @@ impl Vm {
                     let value = frame.stack().peek(count).clone();
                     if let Value::Object(obj) = value {
                         match &(*obj.borrow()) {
-                            Object::Function(func) => {
+                            /* Object::Function(func) => {
                                 if count != func.arity as usize {
                                     frame.stack().pop();
                                     return Err(error!(
@@ -364,6 +368,26 @@ impl Vm {
                                 let stack_top = self.stack.len() - count;
                                 self.frames
                                     .push(CallFrame::new(frame.stack(), stack_top, func));
+                                let frames_len = self.frames.len();
+                                frame = CurrentFrame(&mut self.frames[frames_len - 1]);
+                                continue;
+                            } */
+                            Object::Closure(closure) => {
+                                let func = closure.func();
+                                if count != func.arity as usize {
+                                    frame.stack().pop();
+                                    return Err(error!(
+                                        &self.frames,
+                                        "Expected {} arguments but got {}", func.arity, count
+                                    ));
+                                }
+                                if self.frames.len() == FRAMES_MAX {
+                                    frame.stack().pop();
+                                    return Err(error!(&self.frames, "Stack overflow"));
+                                }
+                                // this whole dance is safe because we're not mutating the function
+                                let stack_top = self.stack.len() - count;
+                                self.frames.push(CallFrame::new(frame.stack(), stack_top, closure));
                                 let frames_len = self.frames.len();
                                 frame = CurrentFrame(&mut self.frames[frames_len - 1]);
                                 continue;

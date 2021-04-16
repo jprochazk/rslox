@@ -1,7 +1,7 @@
 use std::{
     cell::RefCell,
     collections::HashMap,
-    fmt::{self, Display, Formatter},
+    fmt::{self, Debug, Display, Formatter},
     rc::Rc,
 };
 
@@ -9,10 +9,11 @@ use crate::{chunk::Chunk, vm};
 
 pub type Table = HashMap<String, Value>;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Function {
     pub name: String,
     pub arity: u8,
+    pub num_upvalues: u8,
     pub chunk: Chunk,
 }
 
@@ -21,8 +22,25 @@ impl Function {
         Function {
             name: String::new(),
             arity: 0,
+            num_upvalues: 0,
             chunk: Chunk::new(),
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Closure {
+    pub func: *const Function,
+}
+
+impl Closure {
+    pub fn new(func: &Function) -> Closure {
+        Closure { func }
+    }
+
+    #[inline]
+    pub fn func(&self) -> &Function {
+        unsafe { &*self.func }
     }
 }
 
@@ -44,11 +62,21 @@ impl NativeFn {
     }
 }
 
-#[derive(Clone)]
+impl Debug for NativeFn {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NativeFn")
+            .field("name", &self.name)
+            .field("ptr", &(self.ptr.as_ref() as *const _ as usize))
+            .finish()
+    }
+}
+
+#[derive(Clone, Debug)]
 pub enum Object {
     String(String),
     Function(Function),
     NativeFn(NativeFn),
+    Closure(Closure),
 }
 
 impl Object {
@@ -73,6 +101,22 @@ impl Object {
             value
         } else {
             panic!("Not a function");
+        }
+    }
+
+    pub fn as_closure(&self) -> &Closure {
+        if let Object::Closure(value) = self {
+            value
+        } else {
+            panic!("Not a closure");
+        }
+    }
+
+    pub fn as_closure_mut(&mut self) -> &mut Closure {
+        if let Object::Closure(value) = self {
+            value
+        } else {
+            panic!("Not a closure");
         }
     }
 
@@ -106,11 +150,15 @@ impl Object {
     pub fn is_native_fn(&self) -> bool {
         matches!(self, Self::NativeFn(..))
     }
+
+    pub fn is_closure(&self) -> bool {
+        matches!(self, Self::Closure(..))
+    }
 }
 
 pub type Ptr<T> = Rc<RefCell<T>>;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Value {
     Nil,
     Bool(bool),
@@ -182,6 +230,7 @@ impl Display for Object {
             Object::String(v) => write!(f, "{}", v),
             Object::Function(v) => write!(f, "{}", v),
             Object::NativeFn(v) => write!(f, "{}", v),
+            Object::Closure(v) => write!(f, "{}", v.func()),
         }
     }
 }
