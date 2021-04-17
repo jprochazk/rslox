@@ -13,16 +13,14 @@ use rustyline::{error::ReadlineError, Editor};
 use value::{Object, Value};
 use vm::Vm;
 
-// TODO: https://craftinginterpreters.com/closures.html
+// TODO: https://craftinginterpreters.com/garbage-collection.html
 
 fn clock_wrapper(_vm: &mut Vm, _args: Vec<Value>) -> vm::Result<Value> {
     Ok(Value::Number(
-        (std::time::SystemTime::now()
+        std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_secs_f64()
-            * 1000f64)
-            .floor(),
+            .as_secs_f64(),
     ))
 }
 
@@ -63,26 +61,23 @@ fn main() {
     vm.define_native_fn("str", str_wrapper);
     vm.define_native_fn("panic", panic_wrapper);
     vm.define_native_fn("log", log_wrapper);
-    /* if let Some(chunk) = */
-    compiler::compile(
+    if let Some(function) = compiler::compile(
         r#"
-        fun outer() {
-            var a = 1;
-            var b = 2;
-            fun middle() {
-              var c = 3;
-              var d = 4;
-              fun inner() {
-                print a + c + b + d;
-              }
-            }
-          }
+        fun fib(n) {
+            if (n < 2) return n;
+            return fib(n - 2) + fib(n - 1);
+        }
+        var start = clock();
+        var result = fib(30);
+        var end = clock();
+        print result;
+        print (end - start);
         "#,
-    ); /* {
-           if let Err(err) = vm.interpret(&chunk) {
-               eprintln!("Error: {}", err);
-           }
-       } */
+    ) {
+        if let Err(err) = vm.interpret(function) {
+            eprintln!("Error: {}", err);
+        }
+    }
     /* let mut rl = Editor::<()>::new();
     loop {
         let line = rl.readline("> ");

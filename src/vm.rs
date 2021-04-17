@@ -7,7 +7,7 @@ use crate::{
     chunk::disassemble_instruction,
     op::Opcode,
     stack::Stack,
-    value::{Closure, Function, NativeFn, NativeFnPtr, Object, Table, Value},
+    value::{make_ptr, Closure, Function, NativeFn, NativeFnPtr, Object, Table, Upvalue, Value},
 };
 
 use thiserror::Error;
@@ -59,19 +59,16 @@ const FRAMES_MAX: usize = 64;
 #[derive(Debug)]
 pub struct CallFrame {
     pub ip: usize,
-    closure: *const Closure,
-    // HACK: to sidestep lifetime constraints caused by partial mutable borrow of vm state
-    slots: *mut Stack<Value>,
+    closure: *mut Closure,
     stack_top: usize,
     pop_n: usize,
 }
 
 impl CallFrame {
-    pub fn new(slots: *mut Stack<Value>, stack_top: usize, closure: *const Closure) -> CallFrame {
+    pub fn new(stack_top: usize, closure: *mut Closure) -> CallFrame {
         CallFrame {
             ip: 0,
             closure,
-            slots,
             stack_top,
             pop_n: unsafe { ((*closure).func().arity + 1) as usize },
         }
@@ -83,13 +80,13 @@ impl CallFrame {
     }
 
     #[inline]
-    fn func(&self) -> &Function {
-        self.closure().func()
+    fn closure_mut(&mut self) -> &mut Closure {
+        unsafe { &mut (*self.closure) }
     }
 
     #[inline]
-    fn stack(&mut self) -> &mut Stack<Value> {
-        unsafe { &mut *self.slots }
+    fn func(&self) -> &Function {
+        self.closure().func()
     }
 
     #[inline]
@@ -170,82 +167,76 @@ impl Vm {
             .insert(name.clone(), Value::object(Object::NativeFn(NativeFn::new(name, ptr))));
     }
 
-    pub fn interpret(&mut self, func: &Function) -> Result<()> {
+    pub fn interpret(&mut self, func: Function) -> Result<()> {
         // empty potential garbage from last run
         self.frames.clear();
         self.stack.clear();
-        // CallFrame holds a raw pointer to the function, instead
-        // of a reference. This is safe, because the call frames are
-        // all popped before this function returns, meaning that
-        // the raw pointer will not dangle in case the user drops
-        // the Function after interpreting it once.
-
-        // The CallFrame also holds a mutable pointer to the stack.
-        // This is safe because we don't ever violate the
-        // "only one mutable reference at a time" rule.
-        self.frames
-            .push(CallFrame::new(&mut self.stack, 0, &Closure::new(func)));
+        let mut initial_closure = Closure::new(make_ptr(Object::Function(func)), Vec::new());
+        self.frames.push(CallFrame::new(0, &mut initial_closure));
         self.run()
     }
 
     #[allow(clippy::single_match, unused_assignments)]
     fn run(&mut self) -> Result<()> {
-        macro_rules! bin_op {
-            ($stack:expr, $frame:ident, $out:ident, $op:tt) => {{
-                if let Value::Number(right) = $frame.stack().pop() {
-                    if let Value::Number(left) = $frame.stack().pop() {
-                        $frame.stack().push(Value::$out(left $op right));
-                        continue;
-                    }
-                    return Err(error!($stack, "Left operand must be a number"));
-                }
-                return Err(error!($stack, "Right operand must be a number"));
-            }};
-        }
-
         let frames_len = self.frames.len();
+        //let stack = &mut self.stack;
         let mut frame = CurrentFrame(&mut self.frames[frames_len - 1]);
         loop {
             if cfg!(debug_assertions) {
                 println!("        | {}", CallStack(&self.frames));
-                println!("        | {}", frame.stack());
+                println!("        | {}", self.stack);
                 disassemble_instruction(&frame.func().chunk, frame.ip, &mut Vec::new());
             }
             let instruction: Opcode = frame.read_opcode();
             match instruction {
                 Opcode::Constant => {
                     let constant = frame.read_const().clone();
-                    frame.stack().push(constant);
+                    self.stack.push(constant);
                     continue;
                 }
                 Opcode::Closure => {
-                    let constant = frame.read_const().clone();
-                    let object = constant.as_object();
-                    let object = &(*object.borrow());
-                    let func = object.as_function();
-                    let closure = Closure::new(func);
-                    frame.stack().push(Value::object(Object::Closure(closure)));
+                    let (func, upvalues) = {
+                        let constant = frame.read_const().clone();
+                        let object = constant.as_object();
+                        let object_ref = &(*object.borrow());
+                        let func = object_ref.as_function();
+                        let num_upvalues = func.num_upvalues as usize;
+                        let mut upvalues = Vec::with_capacity(num_upvalues);
+                        for _ in 0..num_upvalues {
+                            let is_local = frame.read_byte() == 1;
+                            let index = frame.read_byte() as usize;
+                            if is_local {
+                                let slot = frame.stack_top + index;
+                                upvalues.push(Upvalue::new(self.stack[slot].clone()));
+                            } else {
+                                upvalues.push(frame.closure().upvalues[index].clone());
+                            }
+                        }
+                        (object.clone(), upvalues)
+                    };
+                    let closure = Closure::new(func, upvalues);
+                    self.stack.push(Value::object(Object::Closure(closure)));
                     continue;
                 }
                 Opcode::Nil => {
-                    frame.stack().push(Value::Nil);
+                    self.stack.push(Value::Nil);
                     continue;
                 }
                 Opcode::True => {
-                    frame.stack().push(Value::Bool(true));
+                    self.stack.push(Value::Bool(true));
                     continue;
                 }
                 Opcode::False => {
-                    frame.stack().push(Value::Bool(false));
+                    self.stack.push(Value::Bool(false));
                     continue;
                 }
 
                 Opcode::Add => {
-                    let right = frame.stack().pop();
-                    let left = frame.stack().pop();
+                    let right = self.stack.pop();
+                    let left = self.stack.pop();
                     if let Value::Number(left) = left {
                         if let Value::Number(right) = right {
-                            frame.stack().push(Value::Number(left + right));
+                            self.stack.push(Value::Number(left + right));
                             continue;
                         }
                     }
@@ -254,7 +245,7 @@ impl Vm {
                             if let Value::Object(right) = right {
                                 if let Object::String(right) = &*right.borrow() {
                                     let new_obj = Value::object(Object::String(format!("{}{}", left, right)));
-                                    frame.stack().push(new_obj);
+                                    self.stack.push(new_obj);
                                     continue;
                                 }
                             }
@@ -265,40 +256,95 @@ impl Vm {
                         "Operands must be numbers or strings and must also match"
                     ));
                 }
-                Opcode::Subtract => bin_op!(&self.frames, frame, Number, -),
-                Opcode::Multiply => bin_op!(&self.frames, frame, Number, *),
-                Opcode::Divide => bin_op!(&self.frames, frame, Number, /),
+                Opcode::Subtract => {
+                    let right = self.stack.pop();
+                    let left = self.stack.pop();
+                    if let Value::Number(right) = right {
+                        if let Value::Number(left) = left {
+                            self.stack.push(Value::Number(left - right));
+                            continue;
+                        }
+                        return Err(error!(&self.frames, "Left operand must be a number"));
+                    }
+                    return Err(error!(&self.frames, "Right operand must be a number"));
+                }
+                Opcode::Multiply => {
+                    let right = self.stack.pop();
+                    let left = self.stack.pop();
+                    if let Value::Number(right) = right {
+                        if let Value::Number(left) = left {
+                            self.stack.push(Value::Number(left * right));
+                            continue;
+                        }
+                        return Err(error!(&self.frames, "Left operand must be a number"));
+                    }
+                    return Err(error!(&self.frames, "Right operand must be a number"));
+                }
+                Opcode::Divide => {
+                    let right = self.stack.pop();
+                    let left = self.stack.pop();
+                    if let Value::Number(right) = right {
+                        if let Value::Number(left) = left {
+                            self.stack.push(Value::Number(left / right));
+                            continue;
+                        }
+                        return Err(error!(&self.frames, "Left operand must be a number"));
+                    }
+                    return Err(error!(&self.frames, "Right operand must be a number"));
+                }
                 Opcode::Negate => {
-                    if let Value::Number(value) = frame.stack().pop() {
-                        frame.stack().push(Value::Number(-value));
+                    if let Value::Number(value) = self.stack.pop() {
+                        self.stack.push(Value::Number(-value));
                         continue;
                     }
                     return Err(error!(&self.frames, "Operand must be a number"));
                 }
 
                 Opcode::Not => {
-                    let value = frame.stack().pop();
-                    frame.stack().push(Value::Bool(!value.truthy()));
+                    let value = self.stack.pop();
+                    self.stack.push(Value::Bool(!value.truthy()));
                     continue;
                 }
                 Opcode::Equal => {
-                    let right = frame.stack().pop();
-                    let left = frame.stack().pop();
-                    frame.stack().push(Value::Bool(left == right));
+                    let right = self.stack.pop();
+                    let left = self.stack.pop();
+                    self.stack.push(Value::Bool(left == right));
                     continue;
                 }
-                Opcode::Greater => bin_op!(&self.frames, frame, Bool, >),
-                Opcode::Less => bin_op!(&self.frames, frame, Bool, <),
+                Opcode::Greater => {
+                    let right = self.stack.pop();
+                    let left = self.stack.pop();
+                    if let Value::Number(right) = right {
+                        if let Value::Number(left) = left {
+                            self.stack.push(Value::Bool(left > right));
+                            continue;
+                        }
+                        return Err(error!(&self.frames, "Left operand must be a number"));
+                    }
+                    return Err(error!(&self.frames, "Right operand must be a number"));
+                }
+                Opcode::Less => {
+                    let right = self.stack.pop();
+                    let left = self.stack.pop();
+                    if let Value::Number(right) = right {
+                        if let Value::Number(left) = left {
+                            self.stack.push(Value::Bool(left < right));
+                            continue;
+                        }
+                        return Err(error!(&self.frames, "Left operand must be a number"));
+                    }
+                    return Err(error!(&self.frames, "Right operand must be a number"));
+                }
 
                 Opcode::Pop => {
-                    frame.stack().pop();
+                    self.stack.pop();
                     continue;
                 }
                 Opcode::DefineGlobal => {
                     let constant = frame.read_const().clone();
                     let object = &(*constant.as_object().borrow());
                     let name = object.as_string();
-                    let value = frame.stack().pop();
+                    let value = self.stack.pop();
                     self.globals.insert(name.clone(), value.clone());
                     continue;
                 }
@@ -307,7 +353,9 @@ impl Vm {
                     let object = &(*constant.as_object().borrow());
                     let name = object.as_string();
                     match self.globals.get(name) {
-                        Some(value) => frame.stack().push(value.clone()),
+                        Some(value) => {
+                            self.stack.push(value.clone());
+                        }
                         None => return Err(error!(&self.frames, "Undefined variable '{}'", name)),
                     };
                     continue;
@@ -317,9 +365,9 @@ impl Vm {
                     let object = &(*constant.as_object().borrow());
                     let name = object.as_string();
                     match self.globals.get_mut(name) {
-                        Some(value) => *value = frame.stack().peek(0).clone(),
+                        Some(value) => *value = self.stack.peek(0).clone(),
                         None => {
-                            frame.stack().pop();
+                            self.stack.pop();
                             return Err(error!(&self.frames, "Undefined variable '{}'", name));
                         }
                     }
@@ -328,46 +376,54 @@ impl Vm {
                 Opcode::GetLocal => {
                     let slot = frame.read_byte();
                     let stack_top = frame.stack_top;
-                    let value = frame.stack()[stack_top + slot as usize].clone();
-                    frame.stack().push(value);
+                    let value = self.stack[stack_top + slot as usize].clone();
+                    self.stack.push(value);
                     continue;
                 }
                 Opcode::SetLocal => {
                     let slot = frame.read_byte();
-                    frame.stack()[slot as usize] = frame.stack().top().clone();
+                    let stack_top = frame.stack_top;
+                    self.stack[stack_top + slot as usize] = self.stack.top().clone();
                     continue;
                 }
-                // TODO
-                Opcode::GetUpvalue => {}
-                Opcode::SetUpvalue => {}
+                Opcode::GetUpvalue => {
+                    let slot = frame.read_byte();
+                    let value = frame.closure().upvalues[slot as usize].clone();
+                    self.stack.push(value.capture);
+                    continue;
+                }
+                Opcode::SetUpvalue => {
+                    let slot = frame.read_byte();
+                    frame.closure_mut().upvalues[slot as usize].capture = self.stack.peek(0).clone();
+                    continue;
+                }
 
                 Opcode::Print => {
-                    let value = frame.stack().pop();
+                    let value = self.stack.pop();
                     println!("{}", value);
                     continue;
                 }
 
                 Opcode::Call => {
                     let count = frame.read_byte() as usize;
-                    let value = frame.stack().peek(count).clone();
+                    let value = self.stack.peek(count).clone();
                     if let Value::Object(obj) = value {
-                        match &(*obj.borrow()) {
+                        match &mut (*obj.borrow_mut()) {
                             /* Object::Function(func) => {
                                 if count != func.arity as usize {
-                                    frame.stack().pop();
+                                    self.stack.pop();
                                     return Err(error!(
                                         &self.frames,
                                         "Expected {} arguments but got {}", func.arity, count
                                     ));
                                 }
                                 if self.frames.len() == FRAMES_MAX {
-                                    frame.stack().pop();
-                                    return Err(error!(&self.frames, "Stack overflow"));
+                                    self.stack.pop();
+                                    return Err(error!(&self.frames, "self.stack overflow"));
                                 }
-                                // this whole dance is safe because we're not mutating the function
                                 let stack_top = self.stack.len() - count;
                                 self.frames
-                                    .push(CallFrame::new(frame.stack(), stack_top, func));
+                                    .push(CallFrame::new(self.stack, stack_top, func));
                                 let frames_len = self.frames.len();
                                 frame = CurrentFrame(&mut self.frames[frames_len - 1]);
                                 continue;
@@ -375,30 +431,32 @@ impl Vm {
                             Object::Closure(closure) => {
                                 let func = closure.func();
                                 if count != func.arity as usize {
-                                    frame.stack().pop();
+                                    self.stack.pop();
                                     return Err(error!(
                                         &self.frames,
                                         "Expected {} arguments but got {}", func.arity, count
                                     ));
                                 }
                                 if self.frames.len() == FRAMES_MAX {
-                                    frame.stack().pop();
+                                    self.stack.pop();
                                     return Err(error!(&self.frames, "Stack overflow"));
                                 }
-                                // this whole dance is safe because we're not mutating the function
                                 let stack_top = self.stack.len() - count;
-                                self.frames.push(CallFrame::new(frame.stack(), stack_top, closure));
+                                self.frames.push(CallFrame::new(stack_top, closure));
                                 let frames_len = self.frames.len();
                                 frame = CurrentFrame(&mut self.frames[frames_len - 1]);
                                 continue;
                             }
                             Object::NativeFn(func) => {
-                                let mut args = Vec::new();
-                                for _ in 0..count {
-                                    args.push(self.stack.pop());
-                                }
-                                args.reverse();
-                                self.stack.pop();
+                                let args = {
+                                    let mut args = Vec::new();
+                                    for _ in 0..count {
+                                        args.push(self.stack.pop());
+                                    }
+                                    args.reverse();
+                                    self.stack.pop();
+                                    args
+                                };
                                 let value = (func.ptr)(self, args)?;
                                 self.stack.push(value);
                                 continue;
@@ -406,13 +464,13 @@ impl Vm {
                             _ => (),
                         }
                     }
-                    frame.stack().pop();
+                    self.stack.pop();
                     return Err(error!(&self.frames, "Can only call functions and classes"));
                 }
 
                 Opcode::JumpIfFalse => {
                     let offset = frame.read_short();
-                    if frame.stack().peek(0).truthy() {
+                    if self.stack.peek(0).truthy() {
                         continue;
                     }
                     frame.ip += offset as usize;

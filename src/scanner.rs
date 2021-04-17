@@ -146,7 +146,10 @@ impl<'a> Scanner<'a> {
     }
 
     fn ident(&mut self) -> Token<'a> {
-        while !self.end() && self.peek().is_alphanumeric() {
+        while !self.end() && {
+            let c = self.peek();
+            c.is_alphanumeric() || c == '_'
+        } {
             self.advance();
         }
 

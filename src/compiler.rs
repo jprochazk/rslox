@@ -215,7 +215,11 @@ impl<'a> Compiler<'a> {
         while self.state.top_mut().locals.stack.len() > 0
             && self.state.top_mut().locals.stack.top().depth > self.state.top_mut().locals.current_depth as isize
         {
+            /* if self.state.top_mut().locals.stack.top().is_captured {
+                emit!(self, self.state.top_mut().func.chunk, op CloseUpvalue);
+            } else { */
             emit!(self, self.state.top_mut().func.chunk, op Pop);
+            /* } */
             self.state.top_mut().locals.stack.pop();
         }
     }
@@ -225,7 +229,11 @@ impl<'a> Compiler<'a> {
             self.error("Too many local variables", name);
             return;
         }
-        self.state.top_mut().locals.stack.push(Local { name, depth: -1 })
+        self.state.top_mut().locals.stack.push(Local {
+            name,
+            depth: -1,
+            is_captured: false,
+        })
     }
 
     fn add_upvalue(&mut self, state_idx: usize, index: u8, is_local: bool) -> u8 {
@@ -263,13 +271,13 @@ impl<'a> Compiler<'a> {
     }
 
     fn resolve_upvalue(&mut self, state_idx: usize, name: Token<'a>) -> i8 {
-        println!("{} {}", state_idx, name.lexeme);
         if self.state.len() >= 3 {
             // we're in a nested scope
             // try to find the variable in the enclosing scope
             let enclosing = state_idx - 1;
             let local = self.resolve_local(enclosing, name);
             if local != -1 {
+                self.state[state_idx - 1].locals.stack[local as usize].is_captured = true;
                 // if found, add it as an upvalue of the current function and return its index
                 return self.add_upvalue(state_idx, local as u8, true) as i8;
             }
@@ -586,21 +594,17 @@ impl<'a> Compiler<'a> {
     }
 
     fn named_variable(&mut self, name: Token<'a>, can_assign: bool) {
-        println!("RESOLVING '{}'", name.lexeme);
         let top = self.state.len() - 1;
         let mut arg = self.resolve_local(top, name);
         let (arg, set, get) = if arg != -1 {
-            println!("LOCAL {} {} {}", arg, top, name.lexeme);
             (arg as u8, Opcode::SetLocal, Opcode::GetLocal)
         } else if ({
             arg = self.resolve_upvalue(top, name);
             arg
         }) != -1
         {
-            println!("UPVALUE {} {} {}", arg, top, name.lexeme);
             (arg as u8, Opcode::SetUpvalue, Opcode::GetUpvalue)
         } else {
-            println!("GLOBAL {} {}", top, name.lexeme);
             (self.identifier_constant(name), Opcode::SetGlobal, Opcode::GetGlobal)
         };
 
@@ -792,6 +796,7 @@ impl Debug for Rule {
 struct Local<'a> {
     name: Token<'a>,
     depth: isize,
+    is_captured: bool,
 }
 
 impl<'a> Display for Local<'a> {
@@ -835,6 +840,7 @@ impl Rule {
     }
 }
 
+#[allow(dead_code)]
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 enum Precedence {

@@ -22,7 +22,7 @@ pub enum Opcode {
 
     Print,
     Pop,
-
+    /* CloseUpvalue, */
     DefineGlobal,
     GetGlobal,
     SetGlobal,
@@ -75,6 +75,7 @@ impl Opcode {
             Greater => 0,
             Print => 0,
             Pop => 0,
+            /* CloseUpvalue => 0, */
             DefineGlobal => 1,
             GetGlobal => 1,
             SetGlobal => 1,

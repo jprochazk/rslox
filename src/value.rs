@@ -30,17 +30,38 @@ impl Function {
 
 #[derive(Clone, Debug)]
 pub struct Closure {
-    pub func: *const Function,
+    func_ptr: *const Function,
+    _func: Ptr<Object>,
+    pub upvalues: Vec<Upvalue>,
 }
 
 impl Closure {
-    pub fn new(func: &Function) -> Closure {
-        Closure { func }
+    pub fn new(func: Ptr<Object>, upvalues: Vec<Upvalue>) -> Closure {
+        let func_ptr = {
+            let object = &(*func.borrow());
+            object.as_function() as *const _
+        };
+        Closure {
+            func_ptr,
+            _func: func,
+            upvalues,
+        }
     }
 
     #[inline]
     pub fn func(&self) -> &Function {
-        unsafe { &*self.func }
+        unsafe { &*self.func_ptr }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Upvalue {
+    pub capture: Value,
+}
+
+impl Upvalue {
+    pub fn new(capture: Value) -> Upvalue {
+        Upvalue { capture }
     }
 }
 
@@ -95,68 +116,13 @@ impl Object {
             panic!("Not a function");
         }
     }
-
-    pub fn as_function_mut(&mut self) -> &mut Function {
-        if let Object::Function(value) = self {
-            value
-        } else {
-            panic!("Not a function");
-        }
-    }
-
-    pub fn as_closure(&self) -> &Closure {
-        if let Object::Closure(value) = self {
-            value
-        } else {
-            panic!("Not a closure");
-        }
-    }
-
-    pub fn as_closure_mut(&mut self) -> &mut Closure {
-        if let Object::Closure(value) = self {
-            value
-        } else {
-            panic!("Not a closure");
-        }
-    }
-
-    pub fn as_native_fn(&self) -> &NativeFn {
-        if let Self::NativeFn(v) = self {
-            v
-        } else {
-            panic!("Not a native function");
-        }
-    }
-
-    pub fn as_native_fn_mut(&mut self) -> &mut NativeFn {
-        if let Self::NativeFn(v) = self {
-            v
-        } else {
-            panic!("Not a native function");
-        }
-    }
-
-    /// Returns `true` if the object is [`String`].
-    pub fn is_string(&self) -> bool {
-        matches!(self, Self::String(..))
-    }
-
-    /// Returns `true` if the object is [`Function`].
-    pub fn is_function(&self) -> bool {
-        matches!(self, Self::Function(..))
-    }
-
-    /// Returns `true` if the object is [`NativeFn`].
-    pub fn is_native_fn(&self) -> bool {
-        matches!(self, Self::NativeFn(..))
-    }
-
-    pub fn is_closure(&self) -> bool {
-        matches!(self, Self::Closure(..))
-    }
 }
 
 pub type Ptr<T> = Rc<RefCell<T>>;
+
+pub fn make_ptr<T>(value: T) -> Ptr<T> {
+    Rc::new(RefCell::new(value))
+}
 
 #[derive(Clone, Debug)]
 pub enum Value {
@@ -167,29 +133,9 @@ pub enum Value {
 }
 
 impl Value {
-    /// Returns `true` if the value is [`Nil`].
-    pub fn is_nil(&self) -> bool {
-        matches!(self, Self::Nil)
-    }
-
-    /// Returns `true` if the value is [`Bool`].
-    pub fn is_bool(&self) -> bool {
-        matches!(self, Self::Bool(..))
-    }
-
-    /// Returns `true` if the value is [`Number`].
-    pub fn is_number(&self) -> bool {
-        matches!(self, Self::Number(..))
-    }
-
-    /// Returns `true` if the value is [`Object`].
-    pub fn is_object(&self) -> bool {
-        matches!(self, Self::Object(..))
-    }
-
     /// Heap-allocated value
     pub fn object(inner: Object) -> Value {
-        Value::Object(Rc::new(RefCell::new(inner)))
+        Value::Object(make_ptr(inner))
     }
 
     pub fn as_object(&self) -> &Ptr<Object> {
