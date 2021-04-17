@@ -55,6 +55,17 @@ impl Closure {
 }
 
 #[derive(Clone, Debug)]
+pub struct Class {
+    name: String,
+}
+
+impl Class {
+    pub fn new(name: String) -> Class {
+        Class { name }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Upvalue {
     pub capture: Value,
 }
@@ -98,6 +109,7 @@ pub enum Object {
     Function(Function),
     NativeFn(NativeFn),
     Closure(Closure),
+    Class(Class),
 }
 
 impl Object {
@@ -177,6 +189,7 @@ impl Display for Object {
             Object::Function(v) => write!(f, "{}", v),
             Object::NativeFn(v) => write!(f, "{}", v),
             Object::Closure(v) => write!(f, "{}", v.func()),
+            Object::Class(v) => write!(f, "{}", v),
         }
     }
 }
@@ -194,6 +207,12 @@ impl Display for Function {
 impl Display for NativeFn {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "<native fn {}>", self.name)
+    }
+}
+
+impl Display for Class {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "<class {}>", self.name)
     }
 }
 

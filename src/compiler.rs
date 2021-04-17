@@ -1,10 +1,11 @@
 use std::{
     fmt::{self, Debug, Display, Formatter},
     ops::Add,
+    u8,
 };
 
 use crate::{
-    chunk::disassemble_chunk,
+    chunk::{disassemble_chunk, Chunk},
     op::Opcode,
     scanner::{Scanner, Token, TokenKind},
     stack::Stack,
@@ -64,56 +65,6 @@ impl<'a> CompilerState<'a> {
             upvalues: Stack::new(),
         }
     }
-}
-
-macro_rules! emit {
-    ($compiler:ident, $chunk:expr, const $value:ident) => {{
-        let offset = $chunk.push_const($value);
-        if offset >= 254 {
-            $compiler.error("Too many constants in one chunk", $compiler.previous);
-        }
-        offset
-    }};
-    ($compiler:ident, $chunk:expr, const $value:ident + push) => {{
-        let offset = $chunk.push_const($value);
-        if offset >= std::u8::MAX {
-            $compiler.error("Too many constants in one chunk", $compiler.previous);
-        }
-        $chunk.push_byte(Opcode::Constant as u8, $compiler.previous.line);
-        $chunk.push_byte(offset, $compiler.previous.line);
-        offset
-    }};
-    ($compiler:ident, $chunk:expr, loop $start:ident) => {{
-        emit!($compiler, $chunk, op Loop);
-        let offset = $chunk.buffer.len() - $start + 2;
-        if offset > std::u16::MAX as usize {
-            $compiler.error("Loop body too large", $compiler.previous);
-        }
-        let bytes = offset.to_ne_bytes();
-        emit!($compiler, $chunk, raw bytes[0], bytes[1]);
-    }};
-    ($compiler:ident, $chunk:expr, jmp $kind:ident) => {{
-        emit!($compiler, $chunk, raw Opcode::$kind, 0xFF, 0xFF);
-        $chunk.buffer.len() - 2
-    }};
-    ($compiler:ident, $chunk:expr, raw $kind:expr) => {{
-        $chunk.push_byte($kind.into(), $compiler.previous.line)
-    }};
-    ($compiler:ident, $chunk:expr, raw $($what:expr),+) => {{
-        $chunk.push_bytes(
-            &[$($what.into()),+],
-            $compiler.previous.line
-        )
-    }};
-    ($compiler:ident, $chunk:expr, op $kind:ident) => {{
-        $chunk.push_byte(Opcode::$kind.into(), $compiler.previous.line)
-    }};
-    ($compiler:ident, $chunk:expr, op $($kind:ident),+) => {{
-        $chunk.push_bytes(
-            &[$(Opcode::$kind.into()),+],
-            $compiler.previous.line
-        )
-    }};
 }
 
 impl<'a> Compiler<'a> {
@@ -205,6 +156,55 @@ impl<'a> Compiler<'a> {
         }
     }
 
+    fn emit_raw(&mut self, raw: &[u8]) {
+        let line = self.previous.line;
+        let chunk = &mut self.state.top_mut().func.chunk;
+        chunk.push_bytes(raw, line);
+    }
+
+    fn emit_op(&mut self, op: Opcode) {
+        let line = self.previous.line;
+        let chunk = &mut self.state.top_mut().func.chunk;
+        chunk.push_byte(op as u8, line);
+    }
+
+    fn emit_ops(&mut self, ops: &[Opcode]) {
+        let ops = unsafe { &*(ops as *const [Opcode] as *const [u8]) };
+        let line = self.previous.line;
+        let chunk = &mut self.state.top_mut().func.chunk;
+        chunk.push_bytes(ops, line)
+    }
+
+    fn emit_ops_in(&mut self, chunk: &mut Chunk, ops: &[Opcode]) {
+        let ops = unsafe { &*(ops as *const [Opcode] as *const [u8]) };
+        let line = self.previous.line;
+        chunk.push_bytes(ops, line)
+    }
+
+    fn emit_const(&mut self, value: Value) -> u8 {
+        let chunk = &mut self.state.top_mut().func.chunk;
+        let out = chunk.push_const(value);
+        if chunk.constants.len() == std::u8::MAX as usize {
+            self.error("Too many constants in one chunk", self.previous);
+        }
+        out
+    }
+
+    fn emit_jump(&mut self, op: Opcode) -> usize {
+        self.emit_raw(&[op as u8, 0xFF, 0xFF]);
+        &self.state.top().func.chunk.buffer.len() - 2
+    }
+
+    fn emit_loop(&mut self, start: usize) {
+        self.emit_op(Opcode::Loop);
+        let offset = self.state.top().func.chunk.buffer.len() - start + 2;
+        if offset > std::u16::MAX as usize {
+            self.error("Loop body too large", self.previous);
+        }
+        let bytes = offset.to_ne_bytes();
+        self.emit_raw(&[bytes[0], bytes[1]]);
+    }
+
     fn begin_scope(&mut self) {
         self.state.top_mut().locals.current_depth += 1;
     }
@@ -215,11 +215,7 @@ impl<'a> Compiler<'a> {
         while self.state.top_mut().locals.stack.len() > 0
             && self.state.top_mut().locals.stack.top().depth > self.state.top_mut().locals.current_depth as isize
         {
-            /* if self.state.top_mut().locals.stack.top().is_captured {
-                emit!(self, self.state.top_mut().func.chunk, op CloseUpvalue);
-            } else { */
-            emit!(self, self.state.top_mut().func.chunk, op Pop);
-            /* } */
+            self.emit_op(Opcode::Pop);
             self.state.top_mut().locals.stack.pop();
         }
     }
@@ -327,10 +323,10 @@ impl<'a> Compiler<'a> {
     }
 
     fn declaration(&mut self) {
-        if self.maybe(TokenKind::Fun) {
-            self.fun_declaration();
-        } else if self.maybe(TokenKind::Var) {
+        if self.maybe(TokenKind::Var) {
             self.var_declaration();
+        } else if self.maybe(TokenKind::Fun) {
+            self.fun_declaration();
         } else {
             self.statement();
         }
@@ -375,16 +371,16 @@ impl<'a> Compiler<'a> {
         self.block();
 
         let mut state = self.state.pop();
-        emit!(self, state.func.chunk, op Nil, Return);
+        self.emit_ops_in(&mut state.func.chunk, &[Opcode::Nil, Opcode::Return]);
 
         let num_upvalues = state.func.num_upvalues;
         let value = Value::object(Object::Function(state.func));
-        let offset = emit!(self, self.state.top_mut().func.chunk, const value);
-        emit!(self, self.state.top_mut().func.chunk, raw Opcode::Closure, offset);
+        let offset = self.emit_const(value);
+        self.emit_raw(&[Opcode::Closure as u8, offset]);
         for i in 0..num_upvalues {
             let upvalue = &state.upvalues[i as usize];
             let is_local = if upvalue.is_local { 1u8 } else { 0u8 };
-            emit!(self, self.state.top_mut().func.chunk, raw is_local, upvalue.index);
+            self.emit_raw(&[is_local, upvalue.index]);
         }
     }
 
@@ -393,7 +389,7 @@ impl<'a> Compiler<'a> {
         if self.maybe(TokenKind::Equal) {
             self.expression();
         } else {
-            emit!(self, self.state.top_mut().func.chunk, op Nil);
+            self.emit_op(Opcode::Nil);
         }
         self.consume(TokenKind::Semicolon, "Expected ';'");
         self.define_variable(global);
@@ -435,12 +431,12 @@ impl<'a> Compiler<'a> {
             self.mark_initialized();
             return;
         }
-        emit!(self, self.state.top_mut().func.chunk, raw Opcode::DefineGlobal, global);
+        self.emit_raw(&[Opcode::DefineGlobal as u8, global]);
     }
 
     fn identifier_constant(&mut self, name: Token<'a>) -> u8 {
         let value = Value::object(Object::String(name.lexeme.to_string()));
-        emit!(self, self.state.top_mut().func.chunk, const value)
+        self.emit_const(value)
     }
 
     fn statement(&mut self) {
@@ -477,18 +473,18 @@ impl<'a> Compiler<'a> {
         }
 
         if self.maybe(TokenKind::Semicolon) {
-            emit!(self, self.state.top_mut().func.chunk, op Nil, Return);
+            self.emit_ops(&[Opcode::Nil, Opcode::Return]);
         } else {
             self.expression();
             self.consume(TokenKind::Semicolon, "Expected ';'");
-            emit!(self, self.state.top_mut().func.chunk, op Return);
+            self.emit_op(Opcode::Return);
         }
     }
 
     fn print_statement(&mut self) {
         self.expression();
         self.consume(TokenKind::Semicolon, "Expected ';'");
-        emit!(self, self.state.top_mut().func.chunk, op Print);
+        self.emit_op(Opcode::Print);
     }
 
     fn if_statement(&mut self) {
@@ -496,17 +492,17 @@ impl<'a> Compiler<'a> {
         self.expression();
         self.consume(TokenKind::RightParen, "Expected ')' after condition");
 
-        let then = emit!(self, self.state.top_mut().func.chunk, jmp JumpIfFalse);
-        emit!(self, self.state.top_mut().func.chunk, op Pop);
+        let then = self.emit_jump(Opcode::JumpIfFalse);
+        self.emit_op(Opcode::Pop);
         self.statement();
-        let otherwise = emit!(self, self.state.top_mut().func.chunk, jmp Jump);
+        let otherwise = self.emit_jump(Opcode::Jump);
         self.patch_jump(then);
-        emit!(self, self.state.top_mut().func.chunk, op Pop);
+        self.emit_op(Opcode::Pop);
 
         if self.maybe(TokenKind::Else) {
             self.statement();
-            self.patch_jump(otherwise);
         }
+        self.patch_jump(otherwise);
     }
 
     fn while_statement(&mut self) {
@@ -516,15 +512,15 @@ impl<'a> Compiler<'a> {
         self.expression();
         self.consume(TokenKind::RightParen, "Expected ')' after condition");
 
-        let exit_jump = emit!(self, self.state.top_mut().func.chunk, jmp JumpIfFalse);
+        let exit_jump = self.emit_jump(Opcode::JumpIfFalse);
 
-        emit!(self, self.state.top_mut().func.chunk, op Pop);
+        self.emit_op(Opcode::Pop);
         self.statement();
 
-        emit!(self, self.state.top_mut().func.chunk, loop loop_start);
+        self.emit_loop(loop_start);
 
         self.patch_jump(exit_jump);
-        emit!(self, self.state.top_mut().func.chunk, op Pop);
+        self.emit_op(Opcode::Pop);
     }
 
     fn for_statement(&mut self) {
@@ -544,33 +540,33 @@ impl<'a> Compiler<'a> {
         let exit_jmp = if !self.maybe(TokenKind::Semicolon) {
             self.expression();
             self.consume(TokenKind::Semicolon, "Expected ';'");
-            let exit_jmp = emit!(self, self.state.top_mut().func.chunk, jmp JumpIfFalse);
-            emit!(self, self.state.top_mut().func.chunk, op Pop);
+            let exit_jmp = self.emit_jump(Opcode::JumpIfFalse);
+            self.emit_op(Opcode::Pop);
             Some(exit_jmp)
         } else {
             None
         };
 
         if !self.maybe(TokenKind::RightParen) {
-            let body_jmp = emit!(self, self.state.top_mut().func.chunk, jmp Jump);
+            let body_jmp = self.emit_jump(Opcode::Jump);
 
             let increment_start = self.state.top_mut().func.chunk.buffer.len();
             self.expression();
-            emit!(self, self.state.top_mut().func.chunk, op Pop);
+            self.emit_op(Opcode::Pop);
             self.consume(TokenKind::RightParen, "Expected ')'");
 
-            emit!(self, self.state.top_mut().func.chunk, loop loop_start);
+            self.emit_loop(loop_start);
             loop_start = increment_start;
             self.patch_jump(body_jmp);
         }
 
         self.statement();
 
-        emit!(self, self.state.top_mut().func.chunk, loop loop_start);
+        self.emit_loop(loop_start);
 
         if let Some(exit_jmp) = exit_jmp {
             self.patch_jump(exit_jmp);
-            emit!(self, self.state.top_mut().func.chunk, op Pop);
+            self.emit_op(Opcode::Pop);
         }
 
         self.end_scope();
@@ -590,29 +586,33 @@ impl<'a> Compiler<'a> {
     fn expression_statement(&mut self) {
         self.expression();
         self.consume(TokenKind::Semicolon, "Expected ';'");
-        emit!(self, self.state.top_mut().func.chunk, op Pop);
+        self.emit_op(Opcode::Pop);
     }
 
     fn named_variable(&mut self, name: Token<'a>, can_assign: bool) {
         let top = self.state.len() - 1;
         let mut arg = self.resolve_local(top, name);
         let (arg, set, get) = if arg != -1 {
-            (arg as u8, Opcode::SetLocal, Opcode::GetLocal)
+            (arg as u8, Opcode::SetLocal as u8, Opcode::GetLocal as u8)
         } else if ({
             arg = self.resolve_upvalue(top, name);
             arg
         }) != -1
         {
-            (arg as u8, Opcode::SetUpvalue, Opcode::GetUpvalue)
+            (arg as u8, Opcode::SetUpvalue as u8, Opcode::GetUpvalue as u8)
         } else {
-            (self.identifier_constant(name), Opcode::SetGlobal, Opcode::GetGlobal)
+            (
+                self.identifier_constant(name),
+                Opcode::SetGlobal as u8,
+                Opcode::GetGlobal as u8,
+            )
         };
 
         if can_assign && self.maybe(TokenKind::Equal) {
             self.expression();
-            emit!(self, self.state.top_mut().func.chunk, raw set, arg);
+            self.emit_raw(&[set, arg]);
         } else {
-            emit!(self, self.state.top_mut().func.chunk, raw get, arg);
+            self.emit_raw(&[get, arg]);
         }
     }
 
@@ -646,8 +646,8 @@ fn unary(compiler: &mut Compiler, _can_assign: bool) {
     compiler.precedence(Precedence::Unary);
 
     match kind {
-        TokenKind::Bang => emit!(compiler, compiler.state.top_mut().func.chunk, op Not),
-        TokenKind::Minus => emit!(compiler, compiler.state.top_mut().func.chunk, op Negate),
+        TokenKind::Bang => compiler.emit_op(Opcode::Not),
+        TokenKind::Minus => compiler.emit_op(Opcode::Negate),
         _ => unreachable!(),
     }
 }
@@ -658,42 +658,38 @@ fn binary(compiler: &mut Compiler, _can_assign: bool) {
     let rule = get_rule(op);
     compiler.precedence(rule.precedence + 1);
     match op {
-        TokenKind::Plus => emit!(compiler, compiler.state.top_mut().func.chunk, op Add),
-        TokenKind::Minus => emit!(compiler, compiler.state.top_mut().func.chunk, op Subtract),
-        TokenKind::Star => emit!(compiler, compiler.state.top_mut().func.chunk, op Multiply),
-        TokenKind::Slash => emit!(compiler, compiler.state.top_mut().func.chunk, op Divide),
-        TokenKind::BangEqual => {
-            emit!(compiler, compiler.state.top_mut().func.chunk, op Equal, Not)
-        }
-        TokenKind::EqualEqual => emit!(compiler, compiler.state.top_mut().func.chunk, op Equal),
-        TokenKind::Greater => emit!(compiler, compiler.state.top_mut().func.chunk, op Greater),
-        TokenKind::GreaterEqual => {
-            emit!(compiler, compiler.state.top_mut().func.chunk, op Less, Not)
-        }
-        TokenKind::Less => emit!(compiler, compiler.state.top_mut().func.chunk, op Less),
-        TokenKind::LessEqual => {
-            emit!(compiler, compiler.state.top_mut().func.chunk, op Greater, Not)
-        }
+        TokenKind::Plus => compiler.emit_op(Opcode::Add),
+        TokenKind::Minus => compiler.emit_op(Opcode::Subtract),
+        TokenKind::Star => compiler.emit_op(Opcode::Multiply),
+        TokenKind::Slash => compiler.emit_op(Opcode::Divide),
+        TokenKind::BangEqual => compiler.emit_ops(&[Opcode::Equal, Opcode::Not]),
+        TokenKind::EqualEqual => compiler.emit_op(Opcode::Equal),
+        TokenKind::Greater => compiler.emit_op(Opcode::Greater),
+        TokenKind::GreaterEqual => compiler.emit_ops(&[Opcode::Less, Opcode::Not]),
+        TokenKind::Less => compiler.emit_op(Opcode::Less),
+        TokenKind::LessEqual => compiler.emit_ops(&[Opcode::Greater, Opcode::Not]),
         _ => (),
     }
 }
 
 fn number(compiler: &mut Compiler, _can_assign: bool) {
     let value = Value::Number(compiler.previous.lexeme.parse::<f64>().unwrap());
-    emit!(compiler, compiler.state.top_mut().func.chunk, const value + push);
+    let offset = compiler.emit_const(value);
+    compiler.emit_raw(&[Opcode::Constant as u8, offset]);
 }
 
 fn string(compiler: &mut Compiler, _can_assign: bool) {
     let unquoted = &compiler.previous.lexeme[1..compiler.previous.lexeme.len() - 1];
     let value = Value::object(Object::String(unquoted.to_string()));
-    emit!(compiler, compiler.state.top_mut().func.chunk, const value + push);
+    let offset = compiler.emit_const(value);
+    compiler.emit_raw(&[Opcode::Constant as u8, offset]);
 }
 
 fn literal(compiler: &mut Compiler, _can_assign: bool) {
     match compiler.previous.kind {
-        TokenKind::Nil => emit!(compiler, compiler.state.top_mut().func.chunk, op Nil),
-        TokenKind::True => emit!(compiler, compiler.state.top_mut().func.chunk, op True),
-        TokenKind::False => emit!(compiler, compiler.state.top_mut().func.chunk, op False),
+        TokenKind::Nil => compiler.emit_op(Opcode::Nil),
+        TokenKind::True => compiler.emit_op(Opcode::True),
+        TokenKind::False => compiler.emit_op(Opcode::False),
         _ => unreachable!(),
     }
 }
@@ -703,20 +699,20 @@ fn variable(compiler: &mut Compiler, can_assign: bool) {
 }
 
 fn and(compiler: &mut Compiler, _can_assign: bool) {
-    let end_jmp = emit!(compiler, compiler.state.top_mut().func.chunk, jmp JumpIfFalse);
+    let end_jmp = compiler.emit_jump(Opcode::JumpIfFalse);
 
-    emit!(compiler, compiler.state.top_mut().func.chunk, op Pop);
+    compiler.emit_op(Opcode::Pop);
     compiler.precedence(Precedence::And);
 
     compiler.patch_jump(end_jmp);
 }
 
 fn or(compiler: &mut Compiler, _can_assign: bool) {
-    let else_jmp = emit!(compiler, compiler.state.top_mut().func.chunk, jmp JumpIfFalse);
-    let end_jmp = emit!(compiler, compiler.state.top_mut().func.chunk, jmp Jump);
+    let else_jmp = compiler.emit_jump(Opcode::JumpIfFalse);
+    let end_jmp = compiler.emit_jump(Opcode::Jump);
 
     compiler.patch_jump(else_jmp);
-    emit!(compiler, compiler.state.top_mut().func.chunk, op Pop);
+    compiler.emit_op(Opcode::Pop);
 
     compiler.precedence(Precedence::Or);
     compiler.patch_jump(end_jmp);
@@ -724,7 +720,7 @@ fn or(compiler: &mut Compiler, _can_assign: bool) {
 
 fn call(compiler: &mut Compiler, _can_assign: bool) {
     let args = compiler.arg_list();
-    emit!(compiler, compiler.state.top_mut().func.chunk, raw Opcode::Call, args);
+    compiler.emit_raw(&[Opcode::Call as u8, args]);
 }
 
 #[rustfmt::skip]

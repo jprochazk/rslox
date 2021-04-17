@@ -62,17 +62,13 @@ fn main() {
     vm.define_native_fn("panic", panic_wrapper);
     vm.define_native_fn("log", log_wrapper);
     if let Some(function) = compiler::compile(
-        r#"
-        fun fib(n) {
-            if (n < 2) return n;
-            return fib(n - 2) + fib(n - 1);
+        r##"
+        for (var i = 0; i < 10; i = i + 1) {
+            if (i != 7 and i != 3) {
+                print "#" + str(i);
+            }
         }
-        var start = clock();
-        var result = fib(30);
-        var end = clock();
-        print result;
-        print (end - start);
-        "#,
+        "##,
     ) {
         if let Err(err) = vm.interpret(function) {
             eprintln!("Error: {}", err);
