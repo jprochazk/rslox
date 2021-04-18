@@ -7,7 +7,6 @@ use crate::{
     chunk::disassemble_instruction,
     op::Opcode,
     stack::Stack,
-    util::IoWriteAdapter,
     value::{
         make_ptr, BoundMethod, Class, Closure, Function, Instance, NativeFn, NativeFnPtr, Object, Table, Upvalue, Value,
     },
@@ -75,7 +74,7 @@ pub struct Vm {
     pub frames: Stack<CallFrame>,
     pub stack: Stack<Value>,
     pub globals: Table,
-    pub stdout: Box<dyn std::fmt::Write>,
+    pub output: String,
 }
 
 const FRAMES_MAX: usize = 64;
@@ -173,15 +172,11 @@ impl DerefMut for CurrentFrame {
 
 impl Vm {
     pub fn new() -> Vm {
-        Self::new_with(Box::new(IoWriteAdapter(std::io::stdout())))
-    }
-
-    pub fn new_with(stdout: Box<dyn std::fmt::Write>) -> Vm {
         Vm {
             stack: Stack::new(),
             frames: Stack::new(),
             globals: Table::new(),
-            stdout,
+            output: String::new(),
         }
     }
 
@@ -531,7 +526,7 @@ impl Vm {
 
                 Opcode::Print => {
                     let value = self.stack.pop();
-                    writeln!(&mut self.stdout, "{}", value)?;
+                    writeln!(&mut self.output, "{}", value)?;
                     continue;
                 }
 

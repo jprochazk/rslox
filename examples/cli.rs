@@ -72,8 +72,9 @@ fn repl() {
             Ok(line) => {
                 rl.add_history_entry(line.as_str());
                 if let Some(func) = compiler::compile(&line) {
-                    if let Err(err) = vm.interpret(func) {
-                        eprintln!("Error: {}", err);
+                    match vm.interpret(func) {
+                        Ok(..) => println!("{}", vm.output),
+                        Err(err) => eprintln!("{}", err),
                     }
                 }
             }
@@ -99,9 +100,11 @@ fn file(path: &str) {
             return;
         }
     };
-    if let Some(function) = compiler::compile(&script) {
-        if let Err(err) = init().interpret(function) {
-            eprintln!("{}", err);
+    if let Some(func) = compiler::compile(&script) {
+        let mut vm = init();
+        match vm.interpret(func) {
+            Ok(..) => println!("{}", vm.output),
+            Err(err) => eprintln!("{}", err),
         }
     }
 }
