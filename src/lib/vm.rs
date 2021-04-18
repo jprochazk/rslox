@@ -531,7 +531,7 @@ impl Vm {
                         {
                             match &mut (*obj.borrow_mut()) {
                                 Object::Closure(closure) => {
-                                    let stack_top = self.stack.len() - count;
+                                    let stack_top = self.stack.len() - count - 1;
 
                                     let func = closure.func();
                                     if count != func.arity as usize {
