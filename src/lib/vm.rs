@@ -1,5 +1,5 @@
 use std::{
-    fmt::{self, Display, Formatter},
+    fmt::{self, Display, Formatter, Write},
     ops::{Deref, DerefMut},
 };
 
@@ -7,6 +7,7 @@ use crate::{
     chunk::disassemble_instruction,
     op::Opcode,
     stack::Stack,
+    util::IoWriteAdapter,
     value::{
         make_ptr, BoundMethod, Class, Closure, Function, Instance, NativeFn, NativeFnPtr, Object, Table, Upvalue, Value,
     },
@@ -31,8 +32,12 @@ TODO: possible improvements
 use thiserror::Error;
 
 #[derive(Clone, Debug, Error)]
-#[error("{0}")]
-pub struct Error(String);
+pub enum Error {
+    #[error("{0}")]
+    Simple(String),
+    #[error("{0}")]
+    Fmt(#[from] std::fmt::Error),
+}
 pub type Result<T> = std::result::Result<T, Error>;
 
 struct StackTrace<'a>(&'a Stack<CallFrame>);
@@ -62,7 +67,7 @@ macro_rules! error {
         if $stack.len() > 1 {
             write!(msg, "\n{}", StackTrace($stack)).unwrap();
         }
-        Error(msg)
+        Error::Simple(msg)
     }}
 }
 
@@ -70,6 +75,7 @@ pub struct Vm {
     pub frames: Stack<CallFrame>,
     pub stack: Stack<Value>,
     pub globals: Table,
+    pub stdout: Box<dyn std::fmt::Write>,
 }
 
 const FRAMES_MAX: usize = 64;
@@ -167,10 +173,15 @@ impl DerefMut for CurrentFrame {
 
 impl Vm {
     pub fn new() -> Vm {
+        Self::new_with(Box::new(IoWriteAdapter(std::io::stdout())))
+    }
+
+    pub fn new_with(stdout: Box<dyn std::fmt::Write>) -> Vm {
         Vm {
             stack: Stack::new(),
             frames: Stack::new(),
             globals: Table::new(),
+            stdout,
         }
     }
 
@@ -200,9 +211,10 @@ impl Vm {
         let mut frame = CurrentFrame(&mut self.frames[frames_len - 1]);
         loop {
             if cfg!(debug_assertions) {
-                println!("        | {}", CallStack(&self.frames));
-                println!("        | {}", self.stack);
-                disassemble_instruction(&frame.func().chunk, frame.ip, &mut Vec::new());
+                let mut out = String::new();
+                writeln!(&mut out, "        | {}", CallStack(&self.frames))?;
+                writeln!(&mut out, "        | {}", self.stack)?;
+                disassemble_instruction(&mut out, &frame.func().chunk, frame.ip, &mut Vec::new())?;
             }
             let instruction: Opcode = frame.read_opcode();
             match instruction {
@@ -519,7 +531,7 @@ impl Vm {
 
                 Opcode::Print => {
                     let value = self.stack.pop();
-                    println!("{}", value);
+                    writeln!(&mut self.stdout, "{}", value)?;
                     continue;
                 }
 

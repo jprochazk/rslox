@@ -1,5 +1,5 @@
 use std::{
-    fmt::{self, Debug, Display, Formatter},
+    fmt::{self, Debug, Display, Formatter, Write},
     ops::Add,
     u8,
 };
@@ -29,8 +29,14 @@ pub fn compile(source: &str) -> Option<Function> {
 
     if cfg!(debug_assertions) && !compiler.errored {
         let func = &compiler.state.top().func;
-        disassemble_chunk(&func.chunk, if func.name.is_empty() { "MAIN" } else { &func.name });
-        println!("==========");
+        let mut buffer = String::new();
+        disassemble_chunk(
+            &mut buffer,
+            &func.chunk,
+            if func.name.is_empty() { "MAIN" } else { &func.name },
+        )
+        .ok()?;
+        writeln!(&mut buffer, "==========").ok()?;
     }
     if compiler.errored {
         None
@@ -47,6 +53,7 @@ struct Compiler<'a> {
     previous: Token<'a>,
     errored: bool,
     panic_mode: bool,
+    errors: String,
 }
 
 #[derive(Debug)]
@@ -95,6 +102,7 @@ impl<'a> Compiler<'a> {
             },
             errored: false,
             panic_mode: false,
+            errors: String::new(),
         }
     }
 
@@ -104,9 +112,14 @@ impl<'a> Compiler<'a> {
         }
         self.panic_mode = true;
         if let TokenKind::Error = token.kind {
-            eprintln!("{}", message);
+            writeln!(&mut self.errors, "{}", message).unwrap();
         } else {
-            eprintln!("[line {}] {} at '{}'", token.line, message, token.lexeme);
+            writeln!(
+                &mut self.errors,
+                "[line {}] {} at '{}'",
+                token.line, message, token.lexeme
+            )
+            .unwrap();
         }
         self.errored = true;
     }

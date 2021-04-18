@@ -13,5 +13,6 @@ pub mod compiler;
 pub mod op;
 pub mod scanner;
 pub mod stack;
+mod util;
 pub mod value;
 pub mod vm;
