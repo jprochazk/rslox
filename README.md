@@ -15,7 +15,7 @@ The binary supports executing a file and opening a REPL environment.
 ```
 $ cargo run --release -- file test.lox
 fib(30) = 832040
-Calculated in 236.47212982177734ms
+Calculated in 226.47212982177734ms
 ```
 
 *REPL*
