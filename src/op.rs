@@ -5,6 +5,9 @@ use std::fmt::{self, Display, Formatter};
 pub enum Opcode {
     Constant,
     Closure,
+    Class,
+    Method,
+    Inherit,
     Nil,
     True,
     False,
@@ -30,6 +33,9 @@ pub enum Opcode {
     SetLocal,
     GetUpvalue,
     SetUpvalue,
+    GetProp,
+    SetProp,
+    GetSuper,
 
     Call,
 
@@ -61,6 +67,9 @@ impl Opcode {
         match self {
             Constant => 1,
             Closure => 1,
+            Class => 1,
+            Method => 1,
+            Inherit => 0,
             Nil => 0,
             True => 0,
             False => 0,
@@ -83,6 +92,9 @@ impl Opcode {
             SetLocal => 1,
             GetUpvalue => 1,
             SetUpvalue => 1,
+            GetProp => 1,
+            SetProp => 1,
+            GetSuper => 1,
             Call => 1,
             JumpIfFalse => 2,
             Jump => 2,

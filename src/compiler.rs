@@ -39,6 +39,11 @@ pub fn compile(source: &str) -> Option<Function> {
     }
 }
 
+// TODO: https://craftinginterpreters.com/methods-and-initializers.html#misusing-this
+// CompilerState should also keep track of current Class, not just current Function
+// i have no clue how that should work.
+
+#[derive(Debug)]
 struct Compiler<'a> {
     scanner: Scanner<'a>,
     state: Stack<CompilerState<'a>>,
@@ -52,15 +57,23 @@ struct Compiler<'a> {
 struct CompilerState<'a> {
     func: Function,
     kind: FunctionKind,
+    class: Option<Token<'a>>,
+    superclass: Option<Token<'a>>,
     locals: Locals<'a>,
     upvalues: Stack<Upvalue>,
 }
 
 impl<'a> CompilerState<'a> {
-    pub fn new(kind: FunctionKind) -> CompilerState<'a> {
+    pub fn new(
+        kind: FunctionKind,
+        enclosing_class: Option<Token<'a>>,
+        superclass: Option<Token<'a>>,
+    ) -> CompilerState<'a> {
         CompilerState {
             func: Function::new(),
             kind,
+            class: enclosing_class,
+            superclass,
             locals: Locals::new(),
             upvalues: Stack::new(),
         }
@@ -70,7 +83,7 @@ impl<'a> CompilerState<'a> {
 impl<'a> Compiler<'a> {
     fn new(source: &'a str) -> Compiler<'a> {
         let mut state = Stack::new();
-        state.push(CompilerState::new(FunctionKind::Script));
+        state.push(CompilerState::new(FunctionKind::Script, None, None));
         Compiler {
             scanner: Scanner::new(source),
             state,
@@ -160,6 +173,11 @@ impl<'a> Compiler<'a> {
         let line = self.previous.line;
         let chunk = &mut self.state.top_mut().func.chunk;
         chunk.push_bytes(raw, line);
+    }
+
+    fn emit_raw_in(&mut self, chunk: &mut Chunk, raw: &[u8]) {
+        let line = self.previous.line;
+        chunk.push_bytes(raw, line)
     }
 
     fn emit_op(&mut self, op: Opcode) {
@@ -327,6 +345,8 @@ impl<'a> Compiler<'a> {
             self.var_declaration();
         } else if self.maybe(TokenKind::Fun) {
             self.fun_declaration();
+        } else if self.maybe(TokenKind::Class) {
+            self.class_declaration();
         } else {
             self.statement();
         }
@@ -334,6 +354,63 @@ impl<'a> Compiler<'a> {
         if self.panic_mode {
             self.synchronize();
         }
+    }
+
+    fn class_declaration(&mut self) {
+        self.consume(TokenKind::Identifier, "Expected class name");
+        let class_name = self.previous;
+        let name_constant = self.identifier_constant(self.previous);
+        self.declare_variable();
+
+        self.emit_raw(&[Opcode::Class as u8, name_constant]);
+        self.define_variable(name_constant);
+
+        let previous_class = self.state.top_mut().class;
+        self.state.top_mut().class = Some(class_name);
+
+        if self.maybe(TokenKind::Less) {
+            self.consume(TokenKind::Identifier, "Expected superclass name");
+            let superclass_name = self.previous;
+            variable(self, false);
+            if class_name.lexeme == self.previous.lexeme {
+                self.error("Class cannot inherit from itself", self.previous);
+            }
+
+            self.begin_scope();
+            self.add_local(Token::new(TokenKind::Identifier, "super", self.previous.line));
+            self.define_variable(0);
+
+            self.named_variable(class_name, false);
+            self.emit_op(Opcode::Inherit);
+            self.state.top_mut().superclass = Some(superclass_name);
+        }
+
+        self.named_variable(class_name, false);
+        self.consume(TokenKind::LeftBrace, "Expected '{'");
+        while !self.check(TokenKind::Eof) && !self.check(TokenKind::RightBrace) {
+            self.method();
+        }
+        self.consume(TokenKind::RightBrace, "Expected '}'");
+        self.emit_op(Opcode::Pop);
+
+        if self.state.top().superclass.is_some() {
+            self.end_scope();
+        }
+
+        self.state.top_mut().class = previous_class;
+    }
+
+    fn method(&mut self) {
+        self.consume(TokenKind::Identifier, "Expected method name");
+        let constant = self.identifier_constant(self.previous);
+
+        let kind = if self.previous.lexeme == "init" {
+            FunctionKind::Initializer
+        } else {
+            FunctionKind::Method
+        };
+        self.function(kind);
+        self.emit_raw(&[Opcode::Method as u8, constant]);
     }
 
     fn fun_declaration(&mut self) {
@@ -344,10 +421,30 @@ impl<'a> Compiler<'a> {
     }
 
     fn function(&mut self, kind: FunctionKind) {
-        self.state.push(CompilerState::new(kind));
+        self.state.push(CompilerState::new(
+            kind,
+            self.state.top().class,
+            self.state.top().superclass,
+        ));
+
         let current = self.state.top_mut();
         if kind != FunctionKind::Script {
             current.func.name = self.previous.lexeme.to_string();
+        }
+
+        let depth = current.locals.current_depth as isize;
+        if kind != FunctionKind::Function {
+            current.locals.stack.push(Local {
+                name: Token::new(TokenKind::Identifier, "this", self.previous.line),
+                depth,
+                is_captured: false,
+            });
+        } else {
+            current.locals.stack.push(Local {
+                name: Token::new(TokenKind::Identifier, "", self.previous.line),
+                depth,
+                is_captured: false,
+            });
         }
 
         self.begin_scope();
@@ -371,7 +468,13 @@ impl<'a> Compiler<'a> {
         self.block();
 
         let mut state = self.state.pop();
-        self.emit_ops_in(&mut state.func.chunk, &[Opcode::Nil, Opcode::Return]);
+        self.emit_raw_in(
+            &mut state.func.chunk,
+            match kind {
+                FunctionKind::Initializer => &[Opcode::GetLocal as u8, 0, Opcode::Return as u8],
+                _ => &[Opcode::Nil as u8, Opcode::Return as u8],
+            },
+        );
 
         let num_upvalues = state.func.num_upvalues;
         let value = Value::object(Object::Function(state.func));
@@ -468,13 +571,20 @@ impl<'a> Compiler<'a> {
     }
 
     fn return_statement(&mut self) {
-        if self.state.top().kind == FunctionKind::Script {
+        let fn_kind = self.state.top().kind;
+        if fn_kind == FunctionKind::Script {
             self.error("Cannot return from top-level code", self.previous);
         }
 
         if self.maybe(TokenKind::Semicolon) {
-            self.emit_ops(&[Opcode::Nil, Opcode::Return]);
+            self.emit_raw(match fn_kind {
+                FunctionKind::Initializer => &[Opcode::GetLocal as u8, 0, Opcode::Return as u8],
+                _ => &[Opcode::Nil as u8, Opcode::Return as u8],
+            });
         } else {
+            if fn_kind == FunctionKind::Initializer {
+                self.error("Cannot return a value from an initializer", self.previous);
+            }
             self.expression();
             self.consume(TokenKind::Semicolon, "Expected ';'");
             self.emit_op(Opcode::Return);
@@ -723,6 +833,44 @@ fn call(compiler: &mut Compiler, _can_assign: bool) {
     compiler.emit_raw(&[Opcode::Call as u8, args]);
 }
 
+fn dot(compiler: &mut Compiler, can_assign: bool) {
+    compiler.consume(TokenKind::Identifier, "Expected property name");
+    let name = compiler.identifier_constant(compiler.previous);
+
+    if can_assign && compiler.maybe(TokenKind::Equal) {
+        compiler.expression();
+        compiler.emit_raw(&[Opcode::SetProp as u8, name]);
+    } else {
+        compiler.emit_raw(&[Opcode::GetProp as u8, name]);
+    }
+}
+
+fn this(compiler: &mut Compiler, _can_assign: bool) {
+    if compiler.state.top().class.is_none() {
+        compiler.error("Cannot use 'this' outside of a class", compiler.previous);
+        return;
+    }
+    variable(compiler, false);
+}
+
+fn super_(compiler: &mut Compiler, _can_assign: bool) {
+    if compiler.state.top().class.is_none() {
+        compiler.error("Cannot use 'super' outside of a class", compiler.previous);
+    }
+    if let Some(superclass) = compiler.state.top().superclass {
+        compiler.consume(TokenKind::Dot, "Expected '.'");
+        compiler.consume(TokenKind::Identifier, "Expected superclass method name");
+        let name = compiler.identifier_constant(compiler.previous);
+
+        let line = compiler.previous.line;
+        compiler.named_variable(Token::new(TokenKind::Identifier, "this", line), false);
+        compiler.named_variable(superclass, false);
+        compiler.emit_raw(&[Opcode::GetSuper as u8, name]);
+    } else {
+        compiler.error("Cannot use 'super' in a class with no superclass", compiler.previous);
+    }
+}
+
 #[rustfmt::skip]
 fn get_rule(kind: TokenKind) -> Rule {
     match kind {
@@ -731,7 +879,7 @@ fn get_rule(kind: TokenKind) -> Rule {
         TokenKind::LeftBrace      => Rule::new(None,              None,             Precedence::None),
         TokenKind::RightBrace     => Rule::new(None,              None,             Precedence::None),
         TokenKind::Comma          => Rule::new(None,              None,             Precedence::None),
-        TokenKind::Dot            => Rule::new(None,              None,             Precedence::None),
+        TokenKind::Dot            => Rule::new(None,              Some(&dot),       Precedence::Call),
         TokenKind::Minus          => Rule::new(Some(&unary),      Some(&binary),    Precedence::Term),
         TokenKind::Plus           => Rule::new(None,              Some(&binary),    Precedence::Term),
         TokenKind::Semicolon      => Rule::new(None,              None,             Precedence::None),
@@ -759,8 +907,8 @@ fn get_rule(kind: TokenKind) -> Rule {
         TokenKind::Or             => Rule::new(None,              Some(&or),        Precedence::Or),
         TokenKind::Print          => Rule::new(None,              None,             Precedence::None),
         TokenKind::Return         => Rule::new(None,              None,             Precedence::None),
-        TokenKind::Super          => Rule::new(None,              None,             Precedence::None),
-        TokenKind::This           => Rule::new(None,              None,             Precedence::None),
+        TokenKind::Super          => Rule::new(Some(&super_),     None,             Precedence::None),
+        TokenKind::This           => Rule::new(Some(&this),       None,             Precedence::None),
         TokenKind::True           => Rule::new(Some(&literal),    None,             Precedence::None),
         TokenKind::Var            => Rule::new(None,              None,             Precedence::None),
         TokenKind::While          => Rule::new(None,              None,             Precedence::None),
@@ -870,4 +1018,6 @@ impl Add<u8> for Precedence {
 pub enum FunctionKind {
     Script,
     Function,
+    Method,
+    Initializer,
 }

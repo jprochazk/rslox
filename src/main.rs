@@ -63,11 +63,24 @@ fn main() {
     vm.define_native_fn("log", log_wrapper);
     if let Some(function) = compiler::compile(
         r##"
-        for (var i = 0; i < 10; i = i + 1) {
-            if (i != 7 and i != 3) {
-                print "#" + str(i);
-            }
-        }
+class A {
+    method() {
+        print "A method";
+    }
+}
+    class B < A {
+    method() {
+        print "B method";
+    }
+    test() {
+        this.method();
+        super.method();
+        var m = super.method;
+        m();
+    }
+}
+class C < B {}
+C().test();
         "##,
     ) {
         if let Err(err) = vm.interpret(function) {

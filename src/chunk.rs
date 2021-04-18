@@ -84,6 +84,8 @@ pub fn disassemble_instruction(chunk: &Chunk, offset: usize, nested: &mut Vec<(S
                 }
             }
         }
+        Class => println!("\t{}", chunk.constants[chunk.buffer[offset + 1] as usize]),
+        Method => println!("\t{}", chunk.constants[chunk.buffer[offset + 1] as usize]),
         DefineGlobal => println!("\t{}", chunk.constants[chunk.buffer[offset + 1] as usize]),
         GetGlobal => println!("\t{}", chunk.constants[chunk.buffer[offset + 1] as usize]),
         SetGlobal => println!("\t{}", chunk.constants[chunk.buffer[offset + 1] as usize]),
@@ -91,6 +93,9 @@ pub fn disassemble_instruction(chunk: &Chunk, offset: usize, nested: &mut Vec<(S
         SetLocal => println!("\t[{}]", chunk.buffer[offset + 1]),
         GetUpvalue => println!("\t[{}]", chunk.buffer[offset + 1]),
         SetUpvalue => println!("\t[{}]", chunk.buffer[offset + 1]),
+        GetProp => println!("\t{}", chunk.constants[chunk.buffer[offset + 1] as usize]),
+        SetProp => println!("\t{}", chunk.constants[chunk.buffer[offset + 1] as usize]),
+        GetSuper => println!("\t{}", chunk.constants[chunk.buffer[offset + 1] as usize]),
         Call => println!("\t\t{}", chunk.constants[chunk.buffer[offset + 1] as usize]),
         JumpIfFalse => println!(
             "\t+{}",

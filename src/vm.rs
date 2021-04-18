@@ -7,8 +7,26 @@ use crate::{
     chunk::disassemble_instruction,
     op::Opcode,
     stack::Stack,
-    value::{make_ptr, Closure, Function, NativeFn, NativeFnPtr, Object, Table, Upvalue, Value},
+    value::{
+        make_ptr, BoundMethod, Class, Closure, Function, Instance, NativeFn, NativeFnPtr, Object, Table, Upvalue, Value,
+    },
 };
+
+/*
+TODO: possible improvements
+1. break/continue
+2. Opcode::Invoke
+3. Opcode::SuperInvoke
+4. function/class expressions
+5. % operator
+6. string interpolation
+7. static methods
+8. getters/setters
+9. delete operator
+10. field existence operator
+11. type operator
+∞. etc
+*/
 
 use thiserror::Error;
 
@@ -218,6 +236,47 @@ impl Vm {
                     self.stack.push(Value::object(Object::Closure(closure)));
                     continue;
                 }
+                Opcode::Class => {
+                    let constant = frame.read_const();
+                    let object = constant.as_object();
+                    let object = &(*object.borrow());
+                    let name = object.as_string();
+                    self.stack.push(Value::object(Object::Class(Class::new(name.clone()))));
+                    continue;
+                }
+                Opcode::Method => {
+                    let constant = frame.read_const();
+                    let object = &(*constant.as_object().borrow());
+                    let name = object.as_string().clone();
+                    let method = self.stack.peek(0).clone();
+                    {
+                        let object = self.stack.peek(1);
+                        let object = &mut (*object.as_object().borrow_mut());
+                        let class = object.as_class_mut();
+                        class.methods.insert(name, method);
+                    }
+                    self.stack.pop();
+                }
+                Opcode::Inherit => {
+                    let superclass = self.stack.peek(1).clone();
+                    if let Value::Object(superclass) = superclass {
+                        if let Object::Class(superclass) = &(*superclass.borrow()) {
+                            {
+                                let subclass = self.stack.peek_mut(0);
+                                let subclass = subclass.as_object();
+                                let subclass = &mut (*subclass.borrow_mut());
+                                let subclass = subclass.as_class_mut();
+                                for (name, value) in superclass.methods.iter() {
+                                    subclass.methods.insert(name.clone(), value.clone());
+                                }
+                            }
+                            self.stack.pop();
+                            continue;
+                        }
+                    }
+                    self.stack.pop();
+                    return Err(error!(&self.frames, "Can only inherit from classes"));
+                }
                 Opcode::Nil => {
                     self.stack.push(Value::Nil);
                     continue;
@@ -349,7 +408,7 @@ impl Vm {
                     continue;
                 }
                 Opcode::GetGlobal => {
-                    let constant = frame.read_const().clone();
+                    let constant = frame.read_const();
                     let object = &(*constant.as_object().borrow());
                     let name = object.as_string();
                     match self.globals.get(name) {
@@ -397,6 +456,67 @@ impl Vm {
                     frame.closure_mut().upvalues[slot as usize].capture = self.stack.peek(0).clone();
                     continue;
                 }
+                Opcode::GetProp => {
+                    let object = self.stack.peek(0).clone();
+                    if let Value::Object(instance) = object.clone() {
+                        if let Object::Instance(instance) = &(*instance.borrow()) {
+                            let constant = frame.read_const();
+                            let name = &(*constant.as_object().borrow());
+                            let name = name.as_string();
+
+                            if let Some(value) = instance.fields.get(name) {
+                                self.stack.pop();
+                                self.stack.push(value.clone());
+                                continue;
+                            }
+
+                            if let Some(method) = instance.class().methods.get(name) {
+                                let bound = BoundMethod::new(object, method.as_object().clone());
+                                self.stack.pop();
+                                self.stack.push(Value::object(Object::BoundMethod(bound)));
+                                continue;
+                            }
+
+                            self.stack.pop();
+                            return Err(error!(&self.frames, "Undefined property '{}'", name));
+                        }
+                    }
+                    self.stack.pop();
+                    return Err(error!(&self.frames, "Only instances have properties"));
+                }
+                Opcode::SetProp => {
+                    let object = self.stack.peek(1).clone();
+                    if let Value::Object(object) = object {
+                        if let Object::Instance(instance) = &mut (*object.borrow_mut()) {
+                            let constant = frame.read_const();
+                            let object = &(*constant.as_object().borrow());
+                            let name = object.as_string().clone();
+
+                            let value = self.stack.pop();
+                            self.stack.pop();
+                            instance.fields.insert(name, value.clone());
+                            self.stack.push(value);
+                            continue;
+                        }
+                    }
+                    self.stack.pop();
+                    return Err(error!(&self.frames, "Only instances have properties"));
+                }
+                Opcode::GetSuper => {
+                    let name = frame.read_const();
+                    let name = &(*name.as_object().borrow());
+                    let name = name.as_string();
+                    let superclass_object = self.stack.pop();
+                    let superclass = superclass_object.clone();
+                    let superclass = &(*superclass.as_object().borrow());
+                    let superclass = superclass.as_class();
+                    if let Some(method) = superclass.methods.get(name) {
+                        let bound = BoundMethod::new(superclass_object, method.as_object().clone());
+                        self.stack.pop();
+                        self.stack.push(Value::object(Object::BoundMethod(bound)));
+                        continue;
+                    }
+                }
 
                 Opcode::Print => {
                     let value = self.stack.pop();
@@ -407,28 +527,93 @@ impl Vm {
                 Opcode::Call => {
                     let count = frame.read_byte() as usize;
                     let value = self.stack.peek(count).clone();
-                    if let Value::Object(obj) = value {
-                        match &mut (*obj.borrow_mut()) {
-                            /* Object::Function(func) => {
-                                if count != func.arity as usize {
-                                    self.stack.pop();
-                                    return Err(error!(
-                                        &self.frames,
-                                        "Expected {} arguments but got {}", func.arity, count
-                                    ));
+                    if let Value::Object(obj) = &value {
+                        let mut is_class = false;
+                        {
+                            match &mut (*obj.borrow_mut()) {
+                                Object::Closure(closure) => {
+                                    let stack_top = self.stack.len() - count;
+
+                                    let func = closure.func();
+                                    if count != func.arity as usize {
+                                        self.stack.pop();
+                                        return Err(error!(
+                                            &self.frames,
+                                            "Expected {} arguments but got {}", func.arity, count
+                                        ));
+                                    }
+                                    if self.frames.len() == FRAMES_MAX {
+                                        self.stack.pop();
+                                        return Err(error!(&self.frames, "Stack overflow"));
+                                    }
+                                    self.frames.push(CallFrame::new(stack_top, closure));
+                                    let frames_len = self.frames.len();
+                                    frame = CurrentFrame(&mut self.frames[frames_len - 1]);
+                                    continue;
                                 }
-                                if self.frames.len() == FRAMES_MAX {
-                                    self.stack.pop();
-                                    return Err(error!(&self.frames, "self.stack overflow"));
+                                Object::Class(_) => {
+                                    is_class = true;
                                 }
-                                let stack_top = self.stack.len() - count;
-                                self.frames
-                                    .push(CallFrame::new(self.stack, stack_top, func));
-                                let frames_len = self.frames.len();
-                                frame = CurrentFrame(&mut self.frames[frames_len - 1]);
-                                continue;
-                            } */
-                            Object::Closure(closure) => {
+                                Object::BoundMethod(method) => {
+                                    let stack_top = self.stack.len() - count - 1;
+                                    let receiver = method.receiver.clone();
+                                    self.stack[stack_top] = receiver;
+                                    let closure = method.closure_mut();
+
+                                    let func = closure.func();
+                                    if count != func.arity as usize {
+                                        self.stack.pop();
+                                        return Err(error!(
+                                            &self.frames,
+                                            "Expected {} arguments but got {}", func.arity, count
+                                        ));
+                                    }
+                                    if self.frames.len() == FRAMES_MAX {
+                                        self.stack.pop();
+                                        return Err(error!(&self.frames, "Stack overflow"));
+                                    }
+                                    self.frames.push(CallFrame::new(stack_top, closure));
+                                    let frames_len = self.frames.len();
+                                    frame = CurrentFrame(&mut self.frames[frames_len - 1]);
+                                    continue;
+                                }
+                                Object::NativeFn(func) => {
+                                    let args = {
+                                        let mut args = Vec::new();
+                                        for _ in 0..count {
+                                            args.push(self.stack.pop());
+                                        }
+                                        args.reverse();
+                                        self.stack.pop();
+                                        args
+                                    };
+                                    let value = (func.ptr)(self, args)?;
+                                    self.stack.push(value);
+                                    continue;
+                                }
+                                _ => {
+                                    self.stack.pop();
+                                    return Err(error!(&self.frames, "Can only call functions and classes"));
+                                }
+                            }
+                        }
+                        if is_class {
+                            // create instance
+                            let instance = Instance::new(obj.clone());
+                            let instance = Value::object(Object::Instance(instance));
+                            // put it in the '0th slot' on the stack
+                            let stack_top = self.stack.len() - count - 1;
+                            self.stack[stack_top] = instance.clone();
+
+                            // if it has an initializer, call it
+                            let instance = instance.as_object();
+                            let instance = &(*instance.borrow());
+                            let instance = instance.as_instance();
+                            if let Some(init) = instance.class().methods.get("init") {
+                                let init = init.as_object();
+                                let init = &mut (*init.borrow_mut());
+                                let closure = init.as_closure_mut();
+
                                 let func = closure.func();
                                 if count != func.arity as usize {
                                     self.stack.pop();
@@ -441,27 +626,11 @@ impl Vm {
                                     self.stack.pop();
                                     return Err(error!(&self.frames, "Stack overflow"));
                                 }
-                                let stack_top = self.stack.len() - count;
                                 self.frames.push(CallFrame::new(stack_top, closure));
                                 let frames_len = self.frames.len();
                                 frame = CurrentFrame(&mut self.frames[frames_len - 1]);
-                                continue;
                             }
-                            Object::NativeFn(func) => {
-                                let args = {
-                                    let mut args = Vec::new();
-                                    for _ in 0..count {
-                                        args.push(self.stack.pop());
-                                    }
-                                    args.reverse();
-                                    self.stack.pop();
-                                    args
-                                };
-                                let value = (func.ptr)(self, args)?;
-                                self.stack.push(value);
-                                continue;
-                            }
-                            _ => (),
+                            continue;
                         }
                     }
                     self.stack.pop();
