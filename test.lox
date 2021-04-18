@@ -1,0 +1,10 @@
+fun fib(n) {
+    if (n < 2) return n;
+    return fib(n - 2) + fib(n - 1);
+}
+
+var start = clock();
+var result = fib(30);
+var diff = clock() - start;
+print "fib(30) = " + str(result);
+print "Calculated in " + str(diff * 1000) + "ms";
