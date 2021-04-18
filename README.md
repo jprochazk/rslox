@@ -13,23 +13,23 @@ The binary supports executing a file and opening a REPL environment.
 
 *File*
 ```
-$ cargo run --release -- file test.lox
+$ cargo run --release --example cli -- file test.lox
 fib(30) = 832040
 Calculated in 226.47212982177734ms
 ```
 
 *REPL*
 ```
-$ cargo run --release -- repl
+$ cargo run --release --example cli -- repl
 > var a = 10;
 > print a;
 10
 ```
 
-Running the library without the `--release` flag will additionally print the disassembly of the program, as well as disassemble each instruction as the program is running.
+Running the binary without the `--release` flag will additionally print the disassembly of the program, as well as disassemble each instruction as the program is running.
 
 ```
-$ cargo run -- repl
+$ cargo run --example cli -- repl
 > var a = 10;
 == MAIN ==
 0000    1 Constant      10
