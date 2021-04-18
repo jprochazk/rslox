@@ -1,6 +1,8 @@
 #[derive(Clone, Copy, Debug)]
 pub struct Scanner<'a> {
     pub source: &'a str,
+    pub is_ascii: bool,
+    pub notified: bool,
     pub start: usize,
     pub current: usize,
     pub line: usize,
@@ -24,8 +26,12 @@ macro_rules! token {
 
 impl<'a> Scanner<'a> {
     pub fn new(source: &'a str) -> Scanner<'a> {
+        use unicode_segmentation::UnicodeSegmentation;
+        let is_ascii = source.graphemes(true).all(|g| g.is_ascii());
         Scanner {
             source,
+            is_ascii,
+            notified: false,
             start: 0,
             current: 0,
             line: 1,
@@ -157,6 +163,14 @@ impl<'a> Scanner<'a> {
     }
 
     pub fn next(&mut self) -> Token<'a> {
+        if !self.is_ascii {
+            if !self.notified {
+                self.notified = true;
+                return token!(self, Error, "Source string is not ASCII");
+            } else {
+                return token!(self, Eof);
+            }
+        }
         self.skip_whitespace();
         if self.end() {
             return token!(self, Eof);

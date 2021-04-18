@@ -1,19 +1,15 @@
 #![feature(maybe_uninit_uninit_array, maybe_uninit_ref)]
-#![allow(irrefutable_let_patterns, clippy::blocks_in_if_conditions, clippy::unnecessary_wraps)]
+#![allow(
+    irrefutable_let_patterns,
+    clippy::blocks_in_if_conditions,
+    clippy::unnecessary_wraps,
+    clippy::not_unsafe_ptr_arg_deref
+)]
 
-mod chunk;
-mod compiler;
-mod op;
-mod scanner;
-mod stack;
-mod value;
-mod vm;
-
+use rslox::compiler;
+use rslox::value::{Object, Value};
+use rslox::vm::{self, Vm};
 use rustyline::{error::ReadlineError, Editor};
-use value::{Object, Value};
-use vm::Vm;
-
-// TODO: https://craftinginterpreters.com/garbage-collection.html
 
 fn clock_wrapper(_vm: &mut Vm, _args: Vec<Value>) -> vm::Result<Value> {
     Ok(Value::Number(
@@ -63,12 +59,12 @@ fn main() {
     vm.define_native_fn("log", log_wrapper);
     if let Some(function) = compiler::compile(
         r##"
-class A {
+class 😂 {
     method() {
-        print "A method";
+        print "😂 method";
     }
 }
-    class B < A {
+class B < 😂 {
     method() {
         print "B method";
     }

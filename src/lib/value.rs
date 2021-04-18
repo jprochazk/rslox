@@ -139,7 +139,6 @@ impl Upvalue {
 
 pub type NativeFnPtr = fn(&mut vm::Vm, Vec<Value>) -> vm::Result<Value>;
 
-// TODO: arity?
 #[derive(Clone)]
 pub struct NativeFn {
     pub name: String,
@@ -192,13 +191,13 @@ impl Object {
         }
     }
 
-    pub fn as_closure(&self) -> &Closure {
+    /* pub fn as_closure(&self) -> &Closure {
         if let Self::Closure(v) = self {
             v
         } else {
             panic!("Not a closure");
         }
-    }
+    } */
 
     pub fn as_closure_mut(&mut self) -> &mut Closure {
         if let Self::Closure(v) = self {

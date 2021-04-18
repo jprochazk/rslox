@@ -1,10 +1,7 @@
 use std::{
     fmt::{self, Display, Formatter},
     ops::{Index, IndexMut},
-    slice::SliceIndex,
 };
-
-// TODO: write tests for this
 
 #[derive(Debug)]
 pub struct Stack<T> {
@@ -16,20 +13,14 @@ impl<T> Stack<T> {
         Stack { stack: Vec::new() }
     }
 
-    pub fn with_capacity(capacity: usize) -> Stack<T> {
-        Stack {
-            stack: Vec::with_capacity(capacity),
-        }
-    }
-
-    #[inline]
-    pub fn capacity(&self) -> usize {
-        self.stack.capacity()
-    }
-
     #[inline]
     pub fn len(&self) -> usize {
         self.stack.len()
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     pub fn top(&self) -> &T {

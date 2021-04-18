@@ -179,7 +179,6 @@ impl Vm {
     }
 
     pub fn define_native_fn(&mut self, name: &str, ptr: NativeFnPtr) {
-        // TODO: maybe fix this according to 24.7 defineNative(...) if GC is ever implemented
         let name = name.to_string();
         self.globals
             .insert(name.clone(), Value::object(Object::NativeFn(NativeFn::new(name, ptr))));
@@ -658,7 +657,7 @@ impl Vm {
                 Opcode::Return => {
                     // pop the call frame
                     let popped_frame = self.frames.pop();
-                    if self.frames.len() == 0 {
+                    if self.frames.is_empty() {
                         // if this is the last frame, we're exiting the program
                         return Ok(());
                     }

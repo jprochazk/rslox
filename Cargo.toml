@@ -9,3 +9,12 @@ edition = "2018"
 [dependencies]
 rustyline = "8.0.0"
 thiserror = "1.0.24"
+unicode-segmentation = "1.7.1"
+
+[lib]
+name = "rslox"
+path = "src/lib/lib.rs"
+
+[[bin]]
+name = "rslox-int"
+path = "src/main.rs"

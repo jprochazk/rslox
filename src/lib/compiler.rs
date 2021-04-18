@@ -39,10 +39,6 @@ pub fn compile(source: &str) -> Option<Function> {
     }
 }
 
-// TODO: https://craftinginterpreters.com/methods-and-initializers.html#misusing-this
-// CompilerState should also keep track of current Class, not just current Function
-// i have no clue how that should work.
-
 #[derive(Debug)]
 struct Compiler<'a> {
     scanner: Scanner<'a>,
@@ -107,7 +103,11 @@ impl<'a> Compiler<'a> {
             return;
         }
         self.panic_mode = true;
-        eprintln!("[line {}] {} at '{}'", token.line, message, token.lexeme);
+        if let TokenKind::Error = token.kind {
+            eprintln!("{}", message);
+        } else {
+            eprintln!("[line {}] {} at '{}'", token.line, message, token.lexeme);
+        }
         self.errored = true;
     }
 
@@ -116,7 +116,7 @@ impl<'a> Compiler<'a> {
 
         loop {
             self.current = self.scanner.next();
-            if self.current.kind != TokenKind::Error {
+            if self.current.kind != TokenKind::Error || self.current.kind == TokenKind::Eof {
                 break;
             }
 
@@ -193,12 +193,6 @@ impl<'a> Compiler<'a> {
         chunk.push_bytes(ops, line)
     }
 
-    fn emit_ops_in(&mut self, chunk: &mut Chunk, ops: &[Opcode]) {
-        let ops = unsafe { &*(ops as *const [Opcode] as *const [u8]) };
-        let line = self.previous.line;
-        chunk.push_bytes(ops, line)
-    }
-
     fn emit_const(&mut self, value: Value) -> u8 {
         let chunk = &mut self.state.top_mut().func.chunk;
         let out = chunk.push_const(value);
@@ -230,7 +224,7 @@ impl<'a> Compiler<'a> {
     fn end_scope(&mut self) {
         self.state.top_mut().locals.current_depth -= 1;
 
-        while self.state.top_mut().locals.stack.len() > 0
+        while !self.state.top_mut().locals.stack.is_empty()
             && self.state.top_mut().locals.stack.top().depth > self.state.top_mut().locals.current_depth as isize
         {
             self.emit_op(Opcode::Pop);
