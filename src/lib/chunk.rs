@@ -77,7 +77,7 @@ pub fn disassemble_instruction(
                     for _ in 0..upvalues {
                         let is_local = chunk.buffer[local_offset + 1];
                         let index = chunk.buffer[local_offset + 2];
-                        write!(
+                        writeln!(
                             into,
                             "{:04}    | \t\t{} {}",
                             local_offset + 1,
@@ -103,7 +103,7 @@ pub fn disassemble_instruction(
         GetProp => writeln!(into, "\t{}", chunk.constants[chunk.buffer[offset + 1] as usize])?,
         SetProp => writeln!(into, "\t{}", chunk.constants[chunk.buffer[offset + 1] as usize])?,
         GetSuper => writeln!(into, "\t{}", chunk.constants[chunk.buffer[offset + 1] as usize])?,
-        Call => writeln!(into, "\t\t{}", chunk.constants[chunk.buffer[offset + 1] as usize])?,
+        Call => writeln!(into, "\t\targs {}", chunk.buffer[offset + 1])?,
         JumpIfFalse => writeln!(
             into,
             "\t+{}",

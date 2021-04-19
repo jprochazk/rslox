@@ -103,6 +103,11 @@ fn file(path: &str) {
     };
     match compiler::compile(&script) {
         Ok(func) => {
+            if cfg!(debug_assertions) {
+                let mut out = String::new();
+                rslox::chunk::disassemble_chunk(&mut out, &func.chunk, "MAIN").unwrap();
+                print!("{}", out);
+            }
             let mut vm = init();
             match vm.interpret(func) {
                 Ok(..) => print!("{}", vm.output),
