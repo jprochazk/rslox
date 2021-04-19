@@ -4,6 +4,8 @@ use std::{
     u8,
 };
 
+use thiserror::Error;
+
 use crate::{
     chunk::{disassemble_chunk, Chunk},
     op::Opcode,
@@ -12,7 +14,17 @@ use crate::{
     value::{Function, Object, Value},
 };
 
-pub fn compile(source: &str) -> Option<Function> {
+// TODO: output errors somehow
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("{0}")]
+    Simple(String),
+    #[error("{0}")]
+    Fmt(#[from] std::fmt::Error),
+}
+
+pub fn compile(source: &str) -> Result<Function, Error> {
     let mut compiler = Compiler::new(source);
     compiler.advance();
 
@@ -34,14 +46,13 @@ pub fn compile(source: &str) -> Option<Function> {
             &mut buffer,
             &func.chunk,
             if func.name.is_empty() { "MAIN" } else { &func.name },
-        )
-        .ok()?;
-        writeln!(&mut buffer, "==========").ok()?;
+        )?;
+        writeln!(&mut buffer, "==========")?;
     }
     if compiler.errored {
-        None
+        Err(Error::Simple(compiler.errors))
     } else {
-        Some(compiler.state.pop().func)
+        Ok(compiler.state.pop().func)
     }
 }
 

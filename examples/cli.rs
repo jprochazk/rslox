@@ -71,11 +71,12 @@ fn repl() {
             }
             Ok(line) => {
                 rl.add_history_entry(line.as_str());
-                if let Some(func) = compiler::compile(&line) {
-                    match vm.interpret(func) {
-                        Ok(..) => println!("{}", vm.output),
+                match compiler::compile(&line) {
+                    Ok(func) => match vm.interpret(func) {
+                        Ok(..) => print!("{}", vm.output),
                         Err(err) => eprintln!("{}", err),
-                    }
+                    },
+                    Err(err) => eprintln!("{}", err),
                 }
             }
             Err(ReadlineError::Interrupted) => {
@@ -100,12 +101,15 @@ fn file(path: &str) {
             return;
         }
     };
-    if let Some(func) = compiler::compile(&script) {
-        let mut vm = init();
-        match vm.interpret(func) {
-            Ok(..) => println!("{}", vm.output),
-            Err(err) => eprintln!("{}", err),
+    match compiler::compile(&script) {
+        Ok(func) => {
+            let mut vm = init();
+            match vm.interpret(func) {
+                Ok(..) => print!("{}", vm.output),
+                Err(err) => eprintln!("{}", err),
+            }
         }
+        Err(err) => eprintln!("{}", err),
     }
 }
 
