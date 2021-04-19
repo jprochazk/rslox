@@ -1,0 +1,24 @@
+class A {
+    init(a) {
+        this.a = a;
+    }
+    test() {
+        print "test";
+    }
+}
+class B < A {
+    init(b) {
+        super.init(b + 10);
+        this.b = b;
+    }
+    asdf() {
+        print "asdf";
+    }
+    test() {
+        super.test();
+        this.asdf();
+    }
+}
+var b = B(10);
+print str(b.a) + ", " + str(b.b);
+b.test();

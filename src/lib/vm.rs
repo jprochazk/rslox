@@ -85,15 +85,17 @@ pub struct CallFrame {
     closure: *mut Closure,
     stack_top: usize,
     pop_n: usize,
+    receiver: Option<usize>,
 }
 
 impl CallFrame {
-    pub fn new(stack_top: usize, closure: *mut Closure) -> CallFrame {
+    pub fn new(stack_top: usize, closure: *mut Closure, receiver: Option<usize>) -> CallFrame {
         CallFrame {
             ip: 0,
             closure,
             stack_top,
             pop_n: unsafe { ((*closure).func().arity + 1) as usize },
+            receiver,
         }
     }
 
@@ -195,21 +197,19 @@ impl Vm {
         self.frames.clear();
         self.stack.clear();
         let mut initial_closure = Closure::new(make_ptr(Object::Function(func)), Vec::new());
-        self.frames.push(CallFrame::new(0, &mut initial_closure));
+        self.frames.push(CallFrame::new(0, &mut initial_closure, None));
         self.run()
     }
 
     #[allow(clippy::single_match, unused_assignments)]
     fn run(&mut self) -> Result<()> {
         let frames_len = self.frames.len();
-        //let stack = &mut self.stack;
         let mut frame = CurrentFrame(&mut self.frames[frames_len - 1]);
         loop {
             if cfg!(debug_assertions) {
-                let mut out = String::new();
-                writeln!(&mut out, "        | {}", CallStack(&self.frames))?;
-                writeln!(&mut out, "        | {}", self.stack)?;
-                disassemble_instruction(&mut out, &frame.func().chunk, frame.ip, &mut Vec::new())?;
+                writeln!(&mut self.output, "        | {}", CallStack(&self.frames))?;
+                writeln!(&mut self.output, "        | {}", self.stack)?;
+                disassemble_instruction(&mut self.output, &frame.func().chunk, frame.ip, &mut Vec::new())?;
             }
             let instruction: Opcode = frame.read_opcode();
             match instruction {
@@ -552,7 +552,7 @@ impl Vm {
                                         self.stack.pop();
                                         return Err(error!(&self.frames, "Stack overflow"));
                                     }
-                                    self.frames.push(CallFrame::new(stack_top, closure));
+                                    self.frames.push(CallFrame::new(stack_top, closure, None));
                                     let frames_len = self.frames.len();
                                     frame = CurrentFrame(&mut self.frames[frames_len - 1]);
                                     continue;
@@ -561,8 +561,13 @@ impl Vm {
                                     is_class = true;
                                 }
                                 Object::BoundMethod(method) => {
+                                    let receiver = if let Some(rcv) = self.frames.top().receiver {
+                                        // bind subclass receiver, which is sitting further in the stack
+                                        self.stack[rcv].clone()
+                                    } else {
+                                        method.receiver.clone()
+                                    };
                                     let stack_top = self.stack.len() - count - 1;
-                                    let receiver = method.receiver.clone();
                                     self.stack[stack_top] = receiver;
                                     let closure = method.closure_mut();
 
@@ -578,7 +583,7 @@ impl Vm {
                                         self.stack.pop();
                                         return Err(error!(&self.frames, "Stack overflow"));
                                     }
-                                    self.frames.push(CallFrame::new(stack_top, closure));
+                                    self.frames.push(CallFrame::new(stack_top, closure, Some(stack_top)));
                                     let frames_len = self.frames.len();
                                     frame = CurrentFrame(&mut self.frames[frames_len - 1]);
                                     continue;
@@ -632,7 +637,7 @@ impl Vm {
                                     self.stack.pop();
                                     return Err(error!(&self.frames, "Stack overflow"));
                                 }
-                                self.frames.push(CallFrame::new(stack_top, closure));
+                                self.frames.push(CallFrame::new(stack_top, closure, Some(stack_top)));
                                 let frames_len = self.frames.len();
                                 frame = CurrentFrame(&mut self.frames[frames_len - 1]);
                             }

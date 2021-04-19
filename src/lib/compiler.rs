@@ -447,7 +447,11 @@ impl<'a> Compiler<'a> {
 
         let current = self.state.top_mut();
         if kind != FunctionKind::Script {
-            current.func.name = self.previous.lexeme.to_string();
+            if let Some(class) = current.class {
+                current.func.name = format!("{}.{}", class.lexeme, self.previous.lexeme);
+            } else {
+                current.func.name = self.previous.lexeme.to_string();
+            }
         }
 
         let depth = current.locals.current_depth as isize;

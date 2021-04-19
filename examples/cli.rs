@@ -107,11 +107,15 @@ fn file(path: &str) {
                 let mut out = String::new();
                 rslox::chunk::disassemble_chunk(&mut out, &func.chunk, "MAIN").unwrap();
                 print!("{}", out);
+                println!("=========");
             }
             let mut vm = init();
             match vm.interpret(func) {
                 Ok(..) => print!("{}", vm.output),
-                Err(err) => eprintln!("{}", err),
+                Err(err) => {
+                    print!("{}", vm.output);
+                    eprintln!("{}", err)
+                }
             }
         }
         Err(err) => eprintln!("{}", err),
