@@ -2,6 +2,8 @@ Rust implementation of [Lox](https://craftinginterpreters.com/).
 
 This implementation is compatible with clox, except for closures, which capture by value instead of by variable.
 
+To try out the language and see all its features, visit the [playground](https://lox.jan-prochazka.eu/)!
+
 ### Usage
 
 To see all possible flags, run:
