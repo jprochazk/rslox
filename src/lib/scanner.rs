@@ -85,7 +85,7 @@ impl<'a> Scanner<'a> {
                 }
                 '/' => {
                     if self.peek_next() == '/' {
-                        while self.peek() != '\n' && !self.end() {
+                        while !self.end() && self.peek() != '\n' {
                             self.advance();
                         }
                     } else {
@@ -98,7 +98,7 @@ impl<'a> Scanner<'a> {
     }
 
     fn string(&mut self) -> Token<'a> {
-        while self.peek() != '"' && !self.end() {
+        while !self.end() && self.peek() != '"' {
             if self.peek() == '\n' {
                 self.line += 1
             }
