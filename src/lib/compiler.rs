@@ -313,8 +313,8 @@ impl<'a> Compiler<'a> {
                 // if found, add it as an upvalue of the current function and return its index
                 return self.add_upvalue(state_idx, local as u8, true) as i8;
             }
-            // if it's not in the enclosing scope, it could be found further down the scope stack
-            // try to find the variable in the enclosing scope's upvalues
+            // if it's not in the enclosing scope, it could be found further down the scope
+            // stack try to find the variable in the enclosing scope's upvalues
             let upvalue = self.resolve_upvalue(state_idx - 1, name);
             if upvalue != -1 {
                 // since this
@@ -353,7 +353,7 @@ impl<'a> Compiler<'a> {
         }
 
         if can_assign && self.maybe(TokenKind::Equal) {
-            /* return  */
+            /* return */
             self.error("Invalid assignment target", self.previous);
         }
     }

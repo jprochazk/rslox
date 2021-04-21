@@ -158,7 +158,8 @@ impl<'a> Display for CallStack<'a> {
         Ok(())
     }
 }
-// HACK: To sidestep lifetime constraint of CallFrame caused by partial mutable borrow of vm state
+// HACK: To sidestep lifetime constraint of CallFrame caused by partial mutable
+// borrow of vm state
 struct CurrentFrame(*mut CallFrame);
 impl Deref for CurrentFrame {
     type Target = CallFrame;
